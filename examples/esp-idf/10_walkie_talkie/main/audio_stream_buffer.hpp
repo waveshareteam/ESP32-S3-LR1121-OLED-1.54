@@ -1,4 +1,10 @@
 /*
+ * SPDX-FileCopyrightText: 2026-2027 Waveshare Team
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/*
  * Audio stream buffer management class
  * Provide a type-safe and user-friendly circular buffer implementation
  */
@@ -158,6 +164,7 @@ private:
  * @brief Linear buffer template class
  * Simple and predictable for small data volumes
  */
+// Mutex-protected linear queue used for complete audio/radio frame handoff.
 template<typename T>
 class DynamicBuffer {
 public:

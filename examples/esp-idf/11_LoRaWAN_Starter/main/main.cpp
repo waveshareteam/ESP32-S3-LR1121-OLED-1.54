@@ -1,11 +1,22 @@
+/*
+ * SPDX-FileCopyrightText: 2026-2027 Waveshare Team
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <inttypes.h>
+
 #include "EspHal.h"
+#include "config.h"
+#include "esp_check.h"
 
-EspHal* hal = new EspHal(BSP_SPI_CLK, BSP_SPI_MISO, BSP_SPI_MOSI);
-LR1121 radio = new Module(hal, BSP_SPI_CS, BSP_SPI_INT, BSP_SPI_RESET, BSP_SPI_BUSY);
+static EspHal hal(BSP_SPI_CLK, BSP_SPI_MISO, BSP_SPI_MOSI);
+static Module radio_module(&hal, BSP_SPI_CS, BSP_SPI_INT, BSP_SPI_RESET, BSP_SPI_BUSY);
+static LR1121 radio(&radio_module);
 
-LoRaWANNode node(&radio, &Region, subBand);
+static LoRaWANNode node(&radio, &lorawan_region, lorawan_sub_band);
 
-static const char *TAG = "main";
+static const char *TAG = "lorawan_starter";
 
 static const uint32_t rfswitch_dio_pins[] = {
   RADIOLIB_LR11X0_DIO5, RADIOLIB_LR11X0_DIO6,
@@ -23,69 +34,94 @@ static const Module::RfSwitchMode_t rfswitch_table[] = {
   END_OF_MODE_TABLE,
 };
 
-static nvs_handle_t nvsHandle;
+static nvs_handle_t nvs_handle;
 
-static const char* NVS_NAMESPACE     = "lorawan";
-static const char* NVS_KEY_DEV_NONCE = "nonce";
-static const char* NVS_KEY_SESSION   = "sess";
+static const char *NVS_NAMESPACE = "lorawan";
+static const char *NVS_KEY_DEV_NONCE = "nonce";
+static const char *NVS_KEY_SESSION = "sess";
 
 static void halt()
 {
     while (true) {
-        hal->delay(10);
+        hal.delay(10);
     }
 }
 
-static void saveLoRaWANState() {
-    nvs_set_blob(nvsHandle, NVS_KEY_DEV_NONCE,
-                 node.getBufferNonces(),
-                 RADIOLIB_LORAWAN_NONCES_BUF_SIZE);
+static esp_err_t init_nvs(void)
+{
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_RETURN_ON_ERROR(nvs_flash_erase(), TAG, "Failed to erase NVS");
+        ret = nvs_flash_init();
+    }
+    ESP_RETURN_ON_ERROR(ret, TAG, "Failed to initialize NVS");
 
-    nvs_set_blob(nvsHandle, NVS_KEY_SESSION,
-                 node.getBufferSession(),
-                 RADIOLIB_LORAWAN_SESSION_BUF_SIZE);
+    return nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
+}
 
-    nvs_commit(nvsHandle);
+static esp_err_t save_lorawan_state(void)
+{
+    ESP_RETURN_ON_ERROR(nvs_set_blob(nvs_handle, NVS_KEY_DEV_NONCE,
+                                     node.getBufferNonces(),
+                                     RADIOLIB_LORAWAN_NONCES_BUF_SIZE),
+                        TAG, "Failed to save LoRaWAN nonce state");
+
+    ESP_RETURN_ON_ERROR(nvs_set_blob(nvs_handle, NVS_KEY_SESSION,
+                                     node.getBufferSession(),
+                                     RADIOLIB_LORAWAN_SESSION_BUF_SIZE),
+                        TAG, "Failed to save LoRaWAN session state");
+
+    ESP_RETURN_ON_ERROR(nvs_commit(nvs_handle), TAG, "Failed to commit LoRaWAN state");
     ESP_LOGI(TAG, "[NVS] State saved");
+    return ESP_OK;
 }
 
-static void restoreLoRaWANState() {
-    uint8_t buffer[RADIOLIB_LORAWAN_NONCES_BUF_SIZE];
-    size_t bufSize = sizeof(buffer);
+static void restore_lorawan_state(void)
+{
+    uint8_t nonce_buffer[RADIOLIB_LORAWAN_NONCES_BUF_SIZE];
+    size_t buf_size = sizeof(nonce_buffer);
 
-    esp_err_t ret = nvs_get_blob(nvsHandle, NVS_KEY_DEV_NONCE, buffer, &bufSize);
-    if (ret == ESP_OK) {
-        node.setBufferNonces(buffer);
+    esp_err_t ret = nvs_get_blob(nvs_handle, NVS_KEY_DEV_NONCE, nonce_buffer, &buf_size);
+    if (ret == ESP_OK && buf_size == sizeof(nonce_buffer)) {
+        node.setBufferNonces(nonce_buffer);
         ESP_LOGI(TAG, "[NVS] Nonce restored");
+    } else if (ret != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(TAG, "Failed to restore nonce state: %s", esp_err_to_name(ret));
     }
 
-    bufSize = sizeof(buffer);
-    ret = nvs_get_blob(nvsHandle, NVS_KEY_SESSION, buffer, &bufSize);
-    if (ret == ESP_OK) {
-        node.setBufferSession(buffer);
+    uint8_t session_buffer[RADIOLIB_LORAWAN_SESSION_BUF_SIZE];
+    buf_size = sizeof(session_buffer);
+    ret = nvs_get_blob(nvs_handle, NVS_KEY_SESSION, session_buffer, &buf_size);
+    if (ret == ESP_OK && buf_size == sizeof(session_buffer)) {
+        node.setBufferSession(session_buffer);
         ESP_LOGI(TAG, "[NVS] Session restored");
+    } else if (ret != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(TAG, "Failed to restore session state: %s", esp_err_to_name(ret));
     }
 }
 
-static void printHex(const uint8_t* data, size_t len) {
-    printf("[HEX]: ");
-    for (size_t i = 0; i < len; i++) {
-        printf("%02X ", data[i]);
-    }
-    printf("\n");
+static void log_hex(const uint8_t *data, size_t len)
+{
+    ESP_LOG_BUFFER_HEX(TAG, data, len);
 }
 
-static void printAscii(const uint8_t* data, size_t len) {
-    printf("[ASCII]: ");
-    for (size_t i = 0; i < len; i++) {
-        putchar((data[i] >= 32 && data[i] <= 126) ? data[i] : '.');
+static void log_ascii(const uint8_t *data, size_t len)
+{
+    char ascii[65];
+    size_t ascii_len = (len < (sizeof(ascii) - 1)) ? len : (sizeof(ascii) - 1);
+    for (size_t i = 0; i < ascii_len; i++) {
+        ascii[i] = (data[i] >= 32 && data[i] <= 126) ? (char)data[i] : '.';
     }
-    printf("\n");
+    ascii[ascii_len] = '\0';
+    ESP_LOGI(TAG, "[ASCII]: %s", ascii);
 }
 
 extern "C" void app_main(void) {
-    nvs_flash_init();
-    nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvsHandle);
+    esp_err_t ret = init_nvs();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "NVS init failed: %s", esp_err_to_name(ret));
+        halt();
+    }
 
     ESP_LOGI(TAG, "\n[Setup] Starting...");
 
@@ -99,13 +135,13 @@ extern "C" void app_main(void) {
 
     radio.setRfSwitchTable(rfswitch_dio_pins, rfswitch_table);
 
-    state = node.beginOTAA(joinEUI, devEUI, nwkKey, appKey);
+    state = node.beginOTAA(join_eui, dev_eui, nwk_key, app_key);
     if (state != RADIOLIB_ERR_NONE) {
         ESP_LOGE(TAG, "Node init failed, code: %d", state);
         halt();
     }
 
-    restoreLoRaWANState();
+    restore_lorawan_state();
 
     ESP_LOGI(TAG, "[LoRaWAN] Joining network...");
     state = node.activateOTAA();
@@ -117,7 +153,10 @@ extern "C" void app_main(void) {
         halt();
     }
 
-    saveLoRaWANState();
+    ret = save_lorawan_state();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to save LoRaWAN state: %s", esp_err_to_name(ret));
+    }
     ESP_LOGI(TAG, "[LoRaWAN] Ready!\n");
 
     while (1) {
@@ -143,20 +182,23 @@ extern "C" void app_main(void) {
         }
 
         if (state >= 0) {
-            saveLoRaWANState();
+            ret = save_lorawan_state();
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to save LoRaWAN state: %s", esp_err_to_name(ret));
+            }
         }
 
         if (state > 0) {
             ESP_LOGI(TAG, "[LoRaWAN] Downlink received");
             ESP_LOGI(TAG, "RX Window: %d", state);
-            ESP_LOGI(TAG, "Length: %d", downlinkLen);
-            printHex(downlink, downlinkLen);
-            printAscii(downlink, downlinkLen);
+            ESP_LOGI(TAG, "Length: %zu", downlinkLen);
+            log_hex(downlink, downlinkLen);
+            log_ascii(downlink, downlinkLen);
         } else {
             ESP_LOGI(TAG, "[LoRaWAN] No downlink received");
         }
 
-        ESP_LOGI(TAG, "[Timer] Next uplink in %d s\n", uplinkIntervalSeconds);
-        hal->delay(30 * 1000);
+        ESP_LOGI(TAG, "[Timer] Next uplink in %" PRIu32 " s\n", uplink_interval_seconds);
+        hal.delay(uplink_interval_seconds * 1000UL);
     }
 }

@@ -1,4 +1,10 @@
-﻿#ifndef ESP_HAL_H
+/*
+ * SPDX-FileCopyrightText: 2026-2027 Waveshare Team
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#ifndef ESP_HAL_H
 #define ESP_HAL_H
 
 #include <stdio.h>
@@ -22,12 +28,13 @@
 #define NOP()                       asm volatile ("nop")
 
 
+// Minimal ESP-IDF RadioLib HAL for the LR1121 SPI and GPIO control pins.
 class EspHal : public RadioLibHal {
 public:
 
     EspHal(int8_t sck, int8_t miso, int8_t mosi)
         : RadioLibHal(INPUT, OUTPUT, LOW, HIGH, RISING, FALLING),
-          spiSCK(sck), spiMISO(miso), spiMOSI(mosi), spi(nullptr) {}
+          spiSCK(sck), spiMISO(miso), spiMOSI(mosi), spi(nullptr), spiBusOwner(false) {}
 
     void init() override {
         spiBegin();
@@ -76,8 +83,19 @@ public:
 
         gpio_set_intr_type((gpio_num_t)pin, (gpio_int_type_t)mode);
 
-        gpio_install_isr_service(0);
+        // RadioLib may attach repeatedly; install the shared GPIO ISR service once.
+        static bool isrServiceInstalled = false;
+        if (!isrServiceInstalled) {
+            esp_err_t err = gpio_install_isr_service(0);
+            if (err == ESP_OK || err == ESP_ERR_INVALID_STATE) {
+                isrServiceInstalled = true;
+            } else {
+                ESP_LOGE("EspHal", "gpio_install_isr_service failed: %s", esp_err_to_name(err));
+                return;
+            }
+        }
 
+        gpio_isr_handler_remove((gpio_num_t)pin);
         gpio_isr_handler_add((gpio_num_t)pin, (gpio_isr_t)cb, NULL);
     }
 
@@ -85,7 +103,9 @@ public:
 
         if(pin == RADIOLIB_NC) return;
 
+        gpio_intr_disable((gpio_num_t)pin);
         gpio_isr_handler_remove((gpio_num_t)pin);
+        gpio_set_intr_type((gpio_num_t)pin, GPIO_INTR_DISABLE);
     }
 
     void delay(unsigned long ms) override {
@@ -137,7 +157,12 @@ public:
         return micros() - pulseStart;
     }
 
+    // Reuse an already initialized BSP SPI bus, but remember ownership when we create it.
     void spiBegin() {
+
+        if(spi != nullptr) {
+            return;
+        }
 
         spi_bus_config_t buscfg = {};
         buscfg.sclk_io_num = spiSCK;
@@ -148,7 +173,14 @@ public:
         buscfg.max_transfer_sz = 255;
 
         printf("spiSCK: %d, spiMISO: %d, spiMOSI: %d\n", spiSCK, spiMISO, spiMOSI);
-        spi_bus_initialize(BSP_SPI_NUM, &buscfg, SPI_DMA_CH_AUTO);
+        esp_err_t err = spi_bus_initialize(BSP_SPI_NUM, &buscfg, SPI_DMA_CH_AUTO);
+        if(err == ESP_OK) {
+            spiBusOwner = true;
+        } else if(err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGE("EspHal", "spi_bus_initialize failed: %s", esp_err_to_name(err));
+            return;
+        }
+
         spi_host_device_t host = BSP_SPI_NUM;
 
         spi_device_interface_config_t devcfg = {};
@@ -157,7 +189,16 @@ public:
         devcfg.spics_io_num = -1;
         devcfg.queue_size = 1;
 
-        spi_bus_add_device(host, &devcfg, &spi);
+        err = spi_bus_add_device(host, &devcfg, &spi);
+        if(err != ESP_OK) {
+            ESP_LOGE("EspHal", "spi_bus_add_device failed: %s", esp_err_to_name(err));
+            spi = nullptr;
+            // Free the SPI bus only when this HAL instance initialized it.
+            if(spiBusOwner) {
+                spi_bus_free(BSP_SPI_NUM);
+                spiBusOwner = false;
+            }
+        }
     }
 
     void spiBeginTransaction() {}
@@ -192,9 +233,13 @@ public:
 
         if(spi != nullptr) {
             spi_bus_remove_device(spi);
+            spi = nullptr;
         }
 
-        spi_bus_free(BSP_SPI_NUM);
+        if(spiBusOwner) {
+            spi_bus_free(BSP_SPI_NUM);
+            spiBusOwner = false;
+        }
 
     }
 
@@ -205,5 +250,6 @@ private:
     int8_t spiMOSI;
 
     spi_device_handle_t spi;
+    bool spiBusOwner;
 };
 #endif

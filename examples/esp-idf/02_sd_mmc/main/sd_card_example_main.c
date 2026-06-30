@@ -1,3 +1,9 @@
+/*
+ * SPDX-FileCopyrightText: 2026-2027 Waveshare Team
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 /* SD card and FAT filesystem example.
    This example code is in the Public Domain (or CC0 licensed, at your option.)
 
@@ -11,6 +17,7 @@
 #include <string.h>
 #include <sys/unistd.h>
 #include <sys/stat.h>
+#include "esp_log.h"
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
 #include "driver/sdmmc_host.h"
@@ -27,32 +34,32 @@ static const char *TAG = "example";
 #define EXAMPLE_IS_UHS1    (CONFIG_EXAMPLE_SDMMC_SPEED_UHS_I_SDR50 || CONFIG_EXAMPLE_SDMMC_SPEED_UHS_I_DDR50)
 
 #ifdef CONFIG_EXAMPLE_DEBUG_PIN_CONNECTIONS
-const char* names[] = {"CLK", "CMD", "D0", "D1", "D2", "D3"};
-const int pins[] = {CONFIG_EXAMPLE_PIN_CLK,
-                    CONFIG_EXAMPLE_PIN_CMD,
-                    CONFIG_EXAMPLE_PIN_D0
-                    #ifdef CONFIG_EXAMPLE_SDMMC_BUS_WIDTH_4
-                    ,CONFIG_EXAMPLE_PIN_D1,
-                    CONFIG_EXAMPLE_PIN_D2,
-                    CONFIG_EXAMPLE_PIN_D3
-                    #endif
-                    };
+static const char *const names[] = {"CLK", "CMD", "D0", "D1", "D2", "D3"};
+static const int pins[] = {CONFIG_EXAMPLE_PIN_CLK,
+                           CONFIG_EXAMPLE_PIN_CMD,
+                           CONFIG_EXAMPLE_PIN_D0
+                           #ifdef CONFIG_EXAMPLE_SDMMC_BUS_WIDTH_4
+                           ,CONFIG_EXAMPLE_PIN_D1,
+                           CONFIG_EXAMPLE_PIN_D2,
+                           CONFIG_EXAMPLE_PIN_D3
+                           #endif
+                           };
 
-const int pin_count = sizeof(pins)/sizeof(pins[0]);
+static const int pin_count = sizeof(pins)/sizeof(pins[0]);
 
 #if CONFIG_EXAMPLE_ENABLE_ADC_FEATURE
-const int adc_channels[] = {CONFIG_EXAMPLE_ADC_PIN_CLK,
-                            CONFIG_EXAMPLE_ADC_PIN_CMD,
-                            CONFIG_EXAMPLE_ADC_PIN_D0
-                            #ifdef CONFIG_EXAMPLE_SDMMC_BUS_WIDTH_4
-                            ,CONFIG_EXAMPLE_ADC_PIN_D1,
-                            CONFIG_EXAMPLE_ADC_PIN_D2,
-                            CONFIG_EXAMPLE_ADC_PIN_D3
-                            #endif
-                            };
+static const int adc_channels[] = {CONFIG_EXAMPLE_ADC_PIN_CLK,
+                                   CONFIG_EXAMPLE_ADC_PIN_CMD,
+                                   CONFIG_EXAMPLE_ADC_PIN_D0
+                                   #ifdef CONFIG_EXAMPLE_SDMMC_BUS_WIDTH_4
+                                   ,CONFIG_EXAMPLE_ADC_PIN_D1,
+                                   CONFIG_EXAMPLE_ADC_PIN_D2,
+                                   CONFIG_EXAMPLE_ADC_PIN_D3
+                                   #endif
+                                   };
 #endif //CONFIG_EXAMPLE_ENABLE_ADC_FEATURE
 
-pin_configuration_t config = {
+static pin_configuration_t config = {
     .names = names,
     .pins = pins,
 #if CONFIG_EXAMPLE_ENABLE_ADC_FEATURE
@@ -69,8 +76,16 @@ static esp_err_t s_example_write_file(const char *path, char *data)
         ESP_LOGE(TAG, "Failed to open file for writing");
         return ESP_FAIL;
     }
-    fprintf(f, data);
-    fclose(f);
+    if (fputs(data, f) == EOF) {
+        ESP_LOGE(TAG, "Failed to write file %s", path);
+        fclose(f);
+        return ESP_FAIL;
+    }
+
+    if (fclose(f) != 0) {
+        ESP_LOGE(TAG, "Failed to close file %s", path);
+        return ESP_FAIL;
+    }
     ESP_LOGI(TAG, "File written");
 
     return ESP_OK;
@@ -85,7 +100,11 @@ static esp_err_t s_example_read_file(const char *path)
         return ESP_FAIL;
     }
     char line[EXAMPLE_MAX_CHAR_SIZE];
-    fgets(line, sizeof(line), f);
+    if (fgets(line, sizeof(line), f) == NULL) {
+        ESP_LOGE(TAG, "Failed to read file %s", path);
+        fclose(f);
+        return ESP_FAIL;
+    }
     fclose(f);
 
     // strip newline

@@ -1,4 +1,6 @@
 /*
+ * SPDX-FileCopyrightText: 2026-2027 Waveshare Team
+ *
  * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
@@ -113,7 +115,7 @@ esp_err_t bsp_extra_codec_dev_resume(void);
 esp_err_t bsp_extra_codec_set_fs(uint32_t rate, uint32_t bits_cfg, i2s_slot_mode_t ch);
 
 /**
- * @brief Read data from recoder.
+ * @brief Read data from recorder.
  *
  * @param audio_buffer: The pointer of receiving data buffer
  * @param len: Max data buffer length
@@ -148,7 +150,7 @@ esp_err_t bsp_extra_i2s_write(void *audio_buffer, size_t len, size_t *bytes_writ
  *      - ESP_OK: Success
  *      - Others: Fail
  */
-esp_err_t bsp_extra_codec_init();
+esp_err_t bsp_extra_codec_init(void);
 
 /**
  * @brief Initialize audio player task.

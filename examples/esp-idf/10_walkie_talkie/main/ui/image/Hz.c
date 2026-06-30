@@ -1,3 +1,9 @@
+/*
+ * SPDX-FileCopyrightText: 2026-2027 Waveshare Team
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 #ifdef __has_include
     #if __has_include("lvgl.h")
         #ifndef LV_LVGL_H_INCLUDE_SIMPLE

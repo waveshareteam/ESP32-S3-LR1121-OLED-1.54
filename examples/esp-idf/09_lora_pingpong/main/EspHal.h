@@ -1,7 +1,13 @@
+/*
+ * SPDX-FileCopyrightText: 2026-2027 Waveshare Team
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 #ifndef ESP_HAL_H
 #define ESP_HAL_H
 
-#include <stdio.h>
+#include <inttypes.h>
 
 #include <RadioLib.h>
 
@@ -39,58 +45,79 @@ public:
     }
 
     void pinMode(uint32_t pin, uint32_t mode) override {
-
-        if(pin == RADIOLIB_NC) return;
+        if (pin == RADIOLIB_NC) {
+            return;
+        }
 
         gpio_config_t conf = {};
         conf.pin_bit_mask = 1ULL << pin;
 
-        if(mode == OUTPUT)
+        if (mode == OUTPUT) {
             conf.mode = GPIO_MODE_OUTPUT;
-        else
-        { 
+        } else {
             conf.mode = GPIO_MODE_INPUT;
-            // conf.pull_up_en = GPIO_PULLUP_ENABLE; 
         }
-            
 
-        gpio_config(&conf);
+        esp_err_t ret = gpio_config(&conf);
+        if (ret != ESP_OK) {
+            ESP_LOGE("esp_hal", "Failed to configure GPIO %" PRIu32 ": %s", pin, esp_err_to_name(ret));
+        }
     }
 
     void digitalWrite(uint32_t pin, uint32_t value) override {
+        if (pin == RADIOLIB_NC) {
+            return;
+        }
 
-        if(pin == RADIOLIB_NC) return;
-
-        gpio_set_level((gpio_num_t)pin, value);
+        esp_err_t ret = gpio_set_level((gpio_num_t)pin, value);
+        if (ret != ESP_OK) {
+            ESP_LOGE("esp_hal", "Failed to set GPIO %" PRIu32 ": %s", pin, esp_err_to_name(ret));
+        }
     }
 
     uint32_t digitalRead(uint32_t pin) override {
-
-        if(pin == RADIOLIB_NC) return 0;
+        if (pin == RADIOLIB_NC) {
+            return 0;
+        }
 
         return gpio_get_level((gpio_num_t)pin);
     }
 
     void attachInterrupt(uint32_t pin, void (*cb)(void), uint32_t mode) override {
+        if (pin == RADIOLIB_NC) {
+            return;
+        }
 
-        if(pin == RADIOLIB_NC) return;
+        esp_err_t ret = gpio_set_intr_type((gpio_num_t)pin, (gpio_int_type_t)mode);
+        if (ret != ESP_OK) {
+            ESP_LOGE("esp_hal", "Failed to set GPIO interrupt type %" PRIu32 ": %s", pin, esp_err_to_name(ret));
+            return;
+        }
 
-        gpio_set_intr_type((gpio_num_t)pin, (gpio_int_type_t)mode);
-
-        if(!isr_service_installed)
-        {
-            gpio_install_isr_service(0);
+        if (!isr_service_installed) {
+            ret = gpio_install_isr_service(0);
+            if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+                ESP_LOGE("esp_hal", "Failed to install ISR service: %s", esp_err_to_name(ret));
+                return;
+            }
             isr_service_installed = true;
         }
 
-        gpio_isr_handler_add((gpio_num_t)pin, (gpio_isr_t)cb, NULL);
+        ret = gpio_isr_handler_add((gpio_num_t)pin, (gpio_isr_t)cb, NULL);
+        if (ret != ESP_OK) {
+            ESP_LOGE("esp_hal", "Failed to add GPIO ISR handler %" PRIu32 ": %s", pin, esp_err_to_name(ret));
+        }
     }
 
     void detachInterrupt(uint32_t pin) override {
+        if (pin == RADIOLIB_NC) {
+            return;
+        }
 
-        if(pin == RADIOLIB_NC) return;
-
-        gpio_isr_handler_remove((gpio_num_t)pin);
+        esp_err_t ret = gpio_isr_handler_remove((gpio_num_t)pin);
+        if (ret != ESP_OK) {
+            ESP_LOGW("esp_hal", "Failed to remove GPIO ISR handler %" PRIu32 ": %s", pin, esp_err_to_name(ret));
+        }
     }
 
     void delay(unsigned long ms) override {
@@ -143,6 +170,9 @@ public:
     }
 
     void spiBegin() {
+        if (spi != nullptr) {
+            return;
+        }
 
         spi_bus_config_t buscfg = {};
         buscfg.sclk_io_num = spiSCK;
@@ -152,8 +182,12 @@ public:
         buscfg.quadhd_io_num = -1;
         buscfg.max_transfer_sz = 64;
 
-        printf("spiSCK: %d, spiMISO: %d, spiMOSI: %d\n", spiSCK, spiMISO, spiMOSI);
-        spi_bus_initialize(BSP_SPI_NUM, &buscfg, SPI_DMA_CH_AUTO);
+        ESP_LOGI("esp_hal", "SPI pins: SCK=%d, MISO=%d, MOSI=%d", spiSCK, spiMISO, spiMOSI);
+        esp_err_t ret = spi_bus_initialize(BSP_SPI_NUM, &buscfg, SPI_DMA_CH_AUTO);
+        if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+            ESP_LOGE("esp_hal", "Failed to initialize SPI bus: %s", esp_err_to_name(ret));
+            return;
+        }
         spi_host_device_t host = BSP_SPI_NUM;
 
         spi_device_interface_config_t devcfg = {};
@@ -162,7 +196,11 @@ public:
         devcfg.spics_io_num = -1;
         devcfg.queue_size = 1;
 
-        spi_bus_add_device(host, &devcfg, &spi);
+        ret = spi_bus_add_device(host, &devcfg, &spi);
+        if (ret != ESP_OK) {
+            ESP_LOGE("esp_hal", "Failed to add SPI device: %s", esp_err_to_name(ret));
+            spi = nullptr;
+        }
     }
 
     void spiBeginTransaction() {}
@@ -173,33 +211,55 @@ public:
         t.length = 8;
         t.tx_buffer = &b;
 
-        uint8_t rx;
+        uint8_t rx = 0;
         t.rx_buffer = &rx;
 
-        spi_device_transmit(spi, &t);
+        if (spi == nullptr) {
+            ESP_LOGE("esp_hal", "SPI transfer requested before device initialization");
+            return 0;
+        }
+
+        esp_err_t ret = spi_device_transmit(spi, &t);
+        if (ret != ESP_OK) {
+            ESP_LOGE("esp_hal", "SPI byte transfer failed: %s", esp_err_to_name(ret));
+        }
 
         return rx;
     }
 
     void spiTransfer(uint8_t* out, size_t len, uint8_t* in) {
+        if (spi == nullptr) {
+            ESP_LOGE("esp_hal", "SPI transfer requested before device initialization");
+            return;
+        }
 
         spi_transaction_t t = {};
         t.length = len * 8;
         t.tx_buffer = out;
         t.rx_buffer = in;
 
-        spi_device_transmit(spi, &t);
+        esp_err_t ret = spi_device_transmit(spi, &t);
+        if (ret != ESP_OK) {
+            ESP_LOGE("esp_hal", "SPI transfer failed: %s", esp_err_to_name(ret));
+        }
     }
 
     void spiEndTransaction() {}
 
     void spiEnd() {
 
-        if(spi != nullptr) {
-            spi_bus_remove_device(spi);
+        if (spi != nullptr) {
+            esp_err_t ret = spi_bus_remove_device(spi);
+            if (ret != ESP_OK) {
+                ESP_LOGW("esp_hal", "Failed to remove SPI device: %s", esp_err_to_name(ret));
+            }
+            spi = nullptr;
         }
 
-        spi_bus_free(SPI2_HOST);
+        esp_err_t ret = spi_bus_free(BSP_SPI_NUM);
+        if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW("esp_hal", "Failed to free SPI bus: %s", esp_err_to_name(ret));
+        }
 
     }
 

@@ -1,4 +1,6 @@
 /*
+ * SPDX-FileCopyrightText: 2026-2027 Waveshare Team
+ *
  * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
@@ -73,10 +75,13 @@ void app_main(void)
         .flags.enable_internal_pullup = true,
     };
 
-    ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_config, &tool_bus_handle));
+    i2c_master_bus_handle_t bus_handle = NULL;
+    ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_config, &bus_handle));
+    set_i2ctools_bus_handle(bus_handle);
 
     register_i2ctools();
 
+    /* This banner is REPL user output, so printf is intentional here. */
     printf("\n ==============================================================\n");
     printf(" |             Steps to Use i2c-tools                         |\n");
     printf(" |                                                            |\n");

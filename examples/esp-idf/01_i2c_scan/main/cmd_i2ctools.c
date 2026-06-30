@@ -1,4 +1,6 @@
 /*
+ * SPDX-FileCopyrightText: 2026-2027 Waveshare Team
+ *
  * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Unlicense OR CC0-1.0
@@ -12,6 +14,7 @@
    CONDITIONS OF ANY KIND, either express or implied.
 */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "argtable3/argtable3.h"
 #include "driver/i2c_master.h"
@@ -21,8 +24,14 @@
 static const char *TAG = "cmd_i2ctools";
 
 #define I2C_TOOL_TIMEOUT_VALUE_MS (50)
+#define I2C_TOOL_MAX_TRANSFER_LEN (256)
 static uint32_t i2c_frequency = 100 * 1000;
-i2c_master_bus_handle_t tool_bus_handle;
+static i2c_master_bus_handle_t tool_bus_handle;
+
+void set_i2ctools_bus_handle(i2c_master_bus_handle_t bus_handle)
+{
+    tool_bus_handle = bus_handle;
+}
 
 static esp_err_t i2c_get_port(int port, i2c_port_t *i2c_port)
 {
@@ -169,7 +178,16 @@ static int do_i2cget_cmd(int argc, char **argv)
     if (i2cget_args.data_length->count) {
         len = i2cget_args.data_length->ival[0];
     }
+    if (len <= 0 || len > I2C_TOOL_MAX_TRANSFER_LEN) {
+        ESP_LOGE(TAG, "Wrong read length. Supported range: 1-%d", I2C_TOOL_MAX_TRANSFER_LEN);
+        return 1;
+    }
+
     uint8_t *data = malloc(len);
+    if (!data) {
+        ESP_LOGE(TAG, "No memory for %d-byte I2C read", len);
+        return 1;
+    }
 
     i2c_device_config_t i2c_dev_conf = {
         .scl_speed_hz = i2c_frequency,
@@ -177,10 +195,12 @@ static int do_i2cget_cmd(int argc, char **argv)
     };
     i2c_master_dev_handle_t dev_handle;
     if (i2c_master_bus_add_device(tool_bus_handle, &i2c_dev_conf, &dev_handle) != ESP_OK) {
+        free(data);
         return 1;
     }
 
-    esp_err_t ret = i2c_master_transmit_receive(dev_handle, (uint8_t*)&data_addr, 1, data, len, I2C_TOOL_TIMEOUT_VALUE_MS);
+    uint8_t register_address = (uint8_t)data_addr;
+    esp_err_t ret = i2c_master_transmit_receive(dev_handle, &register_address, 1, data, len, I2C_TOOL_TIMEOUT_VALUE_MS);
     if (ret == ESP_OK) {
         for (int i = 0; i < len; i++) {
             printf("0x%02x ", data[i]);
@@ -243,6 +263,10 @@ static int do_i2cset_cmd(int argc, char **argv)
     }
     /* Check data: "-d" option */
     int len = i2cset_args.data->count;
+    if (len < 0 || len > I2C_TOOL_MAX_TRANSFER_LEN) {
+        ESP_LOGE(TAG, "Wrong write length. Supported range: 0-%d", I2C_TOOL_MAX_TRANSFER_LEN);
+        return 1;
+    }
 
     i2c_device_config_t i2c_dev_conf = {
         .scl_speed_hz = i2c_frequency,
@@ -254,6 +278,11 @@ static int do_i2cset_cmd(int argc, char **argv)
     }
 
     uint8_t *data = malloc(len + 1);
+    if (!data) {
+        ESP_LOGE(TAG, "No memory for %d-byte I2C write", len + 1);
+        (void)i2c_master_bus_rm_device(dev_handle);
+        return 1;
+    }
     data[0] = data_addr;
     for (int i = 0; i < len; i++) {
         data[i + 1] = i2cset_args.data->ival[i];

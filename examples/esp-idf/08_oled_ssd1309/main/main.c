@@ -1,6 +1,15 @@
-#include "bsp/esp-bsp.h"
+/*
+ * SPDX-FileCopyrightText: 2026-2027 Waveshare Team
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
-void lvgl_oled_demo(void)
+#include "bsp/esp-bsp.h"
+#include "esp_log.h"
+
+static const char *TAG = "oled_ssd1309";
+
+static void lvgl_oled_demo(void)
 {
     lv_obj_t *scr = lv_screen_active();
     lv_obj_set_style_text_font(scr, &lv_font_unscii_8, 0);
@@ -26,9 +35,16 @@ void lvgl_oled_demo(void)
 
 void app_main(void)
 {
-    bsp_display_start();
+    esp_err_t ret = bsp_display_start();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start display: %s", esp_err_to_name(ret));
+        return;
+    }
 
-    bsp_display_lock(-1);
+    if (!bsp_display_lock(-1)) {
+        ESP_LOGE(TAG, "Failed to lock display");
+        return;
+    }
     lvgl_oled_demo();
     bsp_display_unlock();
 }

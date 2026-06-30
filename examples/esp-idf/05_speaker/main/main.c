@@ -1,3 +1,9 @@
+/*
+ * SPDX-FileCopyrightText: 2026-2027 Waveshare Team
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
@@ -11,12 +17,12 @@
 #include "freertos/task.h"
 #include "bsp_board_extra.h"
 
-static const char *TAG = "main";
+static const char *TAG = "speaker_main";
 
 #define MAX_MP3_FILES UINT8_MAX
 
-static char *Mp3Path[MAX_MP3_FILES] = {0};
-static char *Mp3Filename[MAX_MP3_FILES] = {0};
+static char *mp3_path[MAX_MP3_FILES] = {0};
+static char *mp3_filename[MAX_MP3_FILES] = {0};
 static uint8_t mp3_num = 0;
 static uint8_t mp3_volume = CODEC_DEFAULT_VOLUME;
 static uint8_t current_mp3_index = 0;
@@ -66,36 +72,42 @@ static void button_event_cb(void *arg, void *data)
     }
 }
 
-static void play_track(uint8_t index, bool keep_pause_state)
+static esp_err_t play_track(uint8_t index, bool keep_pause_state)
 {
     current_mp3_index = index;
-    bsp_extra_player_play_file(Mp3Path[current_mp3_index]);
+    esp_err_t ret = bsp_extra_player_play_file(mp3_path[current_mp3_index]);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to play %s: %s", mp3_path[current_mp3_index], esp_err_to_name(ret));
+        return ret;
+    }
 
     if (keep_pause_state && is_pause) {
         audio_player_pause();
     }
+
+    return ESP_OK;
 }
 
-static void play_next_track(bool keep_pause_state)
+static esp_err_t play_next_track(bool keep_pause_state)
 {
     uint8_t next_index = current_mp3_index + 1;
     if (next_index >= mp3_num) {
         next_index = 0;
     }
 
-    play_track(next_index, keep_pause_state);
+    return play_track(next_index, keep_pause_state);
 }
 
-static void play_previous_track(void)
+static esp_err_t play_previous_track(void)
 {
     uint8_t prev_index = (current_mp3_index == 0) ? (mp3_num - 1) : (current_mp3_index - 1);
-    play_track(prev_index, true);
+    return play_track(prev_index, true);
 }
 
-void speaker_callback(audio_player_cb_ctx_t *ctx)
+static void speaker_callback(audio_player_cb_ctx_t *ctx)
 {
     if (ctx->audio_event == AUDIO_PLAYER_CALLBACK_EVENT_IDLE) {
-        play_next_track(false);
+        (void)play_next_track(false);
     }
 }
 
@@ -105,12 +117,12 @@ static void list_files(const char *base_path)
     DIR *dir = opendir(base_path);
 
     if (!dir) {
-        printf("Error: Could not open directory %s\n", base_path);
+        ESP_LOGE(TAG, "Could not open directory %s", base_path);
         return;
     }
 
     struct dirent *entry;
-    printf("=== Scanning directory: %s ===\n", base_path);
+    ESP_LOGI(TAG, "Scanning directory: %s", base_path);
 
     while (i < MAX_MP3_FILES && (entry = readdir(dir)) != NULL) {
         const char *file_name = entry->d_name;
@@ -120,25 +132,30 @@ static void list_files(const char *base_path)
             size_t name_len = len - 4;
             size_t path_len = strlen(base_path) + len + 2;
 
-            Mp3Filename[i] = malloc(name_len + 1);
-            Mp3Path[i] = malloc(path_len);
+            char *filename = malloc(name_len + 1);
+            char *path = malloc(path_len);
 
-            if (!Mp3Filename[i] || !Mp3Path[i]) {
-                printf("Memory allocation failed!\n");
+            if (!filename || !path) {
+                free(filename);
+                free(path);
+                ESP_LOGE(TAG, "Memory allocation failed while scanning %s", file_name);
                 break;
             }
 
-            snprintf(Mp3Path[i], path_len, "%s/%s", base_path, file_name);
-            snprintf(Mp3Filename[i], name_len + 1, "%.*s", (int)name_len, file_name);
+            snprintf(path, path_len, "%s/%s", base_path, file_name);
+            snprintf(filename, name_len + 1, "%.*s", (int)name_len, file_name);
 
-            printf("Found MP3 [%d]: %s\n", i, Mp3Filename[i]);
+            mp3_path[i] = path;
+            mp3_filename[i] = filename;
+
+            ESP_LOGI(TAG, "Found MP3 [%u]: %s", i, mp3_filename[i]);
             i++;
         }
     }
 
     mp3_num = i;
     closedir(dir);
-    printf("=== Scan done! Total MP3: %d ===\n", mp3_num);
+    ESP_LOGI(TAG, "Scan done. Total MP3: %u", mp3_num);
 }
 
 static esp_err_t register_button(int gpio_num, int active_level, bool double_click)
@@ -155,9 +172,15 @@ static esp_err_t register_button(int gpio_num, int active_level, bool double_cli
         return ret;
     }
 
-    iot_button_register_cb(btn, BUTTON_SINGLE_CLICK, NULL, button_event_cb, (void *)(intptr_t)gpio_num);
+    ret = iot_button_register_cb(btn, BUTTON_SINGLE_CLICK, NULL, button_event_cb, (void *)(intptr_t)gpio_num);
+    if (ret != ESP_OK) {
+        return ret;
+    }
     if (double_click) {
-        iot_button_register_cb(btn, BUTTON_DOUBLE_CLICK, NULL, button_event_cb, (void *)(intptr_t)gpio_num);
+        ret = iot_button_register_cb(btn, BUTTON_DOUBLE_CLICK, NULL, button_event_cb, (void *)(intptr_t)gpio_num);
+        if (ret != ESP_OK) {
+            return ret;
+        }
     }
 
     return ESP_OK;
@@ -165,20 +188,43 @@ static esp_err_t register_button(int gpio_num, int active_level, bool double_cli
 
 void app_main(void)
 {
-    if (bsp_sdcard_mount() == ESP_OK) {
+    esp_err_t ret = bsp_sdcard_mount();
+    if (ret == ESP_OK) {
         list_files(BSP_SD_MOUNT_POINT"/music");
         if (mp3_num == 0) {
             ESP_LOGI(TAG, "No MP3 files found!");
             return;
         }
+    } else {
+        ESP_LOGE(TAG, "Failed to mount SD card: %s", esp_err_to_name(ret));
+        return;
     }
 
-    bsp_extra_codec_init();
-    bsp_extra_codec_volume_set(mp3_volume, NULL);
-    bsp_extra_player_register_callback(speaker_callback, NULL);
-    bsp_extra_player_init();
+    ret = bsp_extra_codec_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize codec: %s", esp_err_to_name(ret));
+        return;
+    }
 
-    bsp_extra_player_play_file(Mp3Path[current_mp3_index]);
+    ret = bsp_extra_codec_volume_set(mp3_volume, NULL);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set volume: %s", esp_err_to_name(ret));
+        return;
+    }
+
+    bsp_extra_player_register_callback(speaker_callback, NULL);
+
+    ret = bsp_extra_player_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize player: %s", esp_err_to_name(ret));
+        return;
+    }
+
+    ret = bsp_extra_player_play_file(mp3_path[current_mp3_index]);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to play initial file %s: %s", mp3_path[current_mp3_index], esp_err_to_name(ret));
+        return;
+    }
 
     const struct {
         int gpio_num;
@@ -192,7 +238,9 @@ void app_main(void)
     };
 
     for (size_t i = 0; i < sizeof(buttons) / sizeof(buttons[0]); ++i) {
-        if (register_button(buttons[i].gpio_num, buttons[i].active_level, buttons[i].double_click) != ESP_OK) {
+        ret = register_button(buttons[i].gpio_num, buttons[i].active_level, buttons[i].double_click);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to register GPIO %d button: %s", buttons[i].gpio_num, esp_err_to_name(ret));
             return;
         }
     }
@@ -202,14 +250,16 @@ void app_main(void)
     while (1) {
         if (btn_next_flag) {
             btn_next_flag = false;
-            play_next_track(true);
-            ESP_LOGI(TAG, "Switched to Next: %s (Pause: %d)", Mp3Filename[current_mp3_index], is_pause);
+            if (play_next_track(true) == ESP_OK) {
+                ESP_LOGI(TAG, "Switched to Next: %s (Pause: %d)", mp3_filename[current_mp3_index], is_pause);
+            }
         }
 
         if (btn_prev_flag) {
             btn_prev_flag = false;
-            play_previous_track();
-            ESP_LOGI(TAG, "Switched to Prev: %s (Pause: %d)", Mp3Filename[current_mp3_index], is_pause);
+            if (play_previous_track() == ESP_OK) {
+                ESP_LOGI(TAG, "Switched to Prev: %s (Pause: %d)", mp3_filename[current_mp3_index], is_pause);
+            }
         }
 
         if (btn_play_pause_flag) {
@@ -227,17 +277,14 @@ void app_main(void)
         if (btn_volume_flag) {
             btn_volume_flag = false;
             if (is_volume) {
-                mp3_volume += 5;
-                if (mp3_volume > 100) {
-                    mp3_volume = 100;
-                }
+                mp3_volume = (mp3_volume > 95) ? 100 : (mp3_volume + 5);
             } else {
-                mp3_volume -= 5;
-                if (mp3_volume < 0) {
-                    mp3_volume = 0;
-                }
+                mp3_volume = (mp3_volume < 5) ? 0 : (mp3_volume - 5);
             }
-            bsp_extra_codec_volume_set(mp3_volume, NULL);
+            ret = bsp_extra_codec_volume_set(mp3_volume, NULL);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to set volume %u: %s", mp3_volume, esp_err_to_name(ret));
+            }
         }
         vTaskDelay(30 / portTICK_PERIOD_MS);
     }

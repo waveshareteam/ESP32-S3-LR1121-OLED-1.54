@@ -1,19 +1,30 @@
-#include <string.h>
+/*
+ * SPDX-FileCopyrightText: 2026-2027 Waveshare Team
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
+#include <stdlib.h>
+#include <stdio.h>
+
+#include "peripheral_guard.h"
+#include "radio_device.h"
+#include "radio_settings.h"
 #include "ui.h"
 
-// create a new instance of the HAL class
-EspHal* hal = new EspHal(BSP_SPI_CLK, BSP_SPI_MISO, BSP_SPI_MOSI);
-
-// now we can create the radio module
-LR1121 radio = new Module(hal, BSP_SPI_CS, BSP_SPI_INT, BSP_SPI_RESET, BSP_SPI_BUSY);
-
+// UI objects are kept globally because LVGL timers refresh them after creation.
 lv_obj_t *page1;
 lv_obj_t *page2;
 
 lv_obj_t * label_rtc = NULL;
 lv_obj_t * label_bat = NULL;
 lv_obj_t * bat_Image = NULL;
+lv_obj_t * mode_btn = NULL;
+lv_obj_t * label_mode = NULL;
+lv_obj_t * label_freq = NULL;
+lv_obj_t * label_unit = NULL;
+lv_obj_t * label_params = NULL;
+lv_obj_t * label_setting_title = NULL;
 
 lv_group_t * g = NULL;
 lv_obj_t * ptt_btn = NULL;
@@ -24,6 +35,7 @@ lv_obj_t * target_roller = NULL;
 lv_obj_t * md_btn = NULL;
 lv_obj_t * md_Image = NULL;
 lv_obj_t * md_Roller = NULL;
+lv_obj_t * band_Roller = NULL;
 
 lv_obj_t * hz_btn = NULL;
 lv_obj_t * hz_Image = NULL;
@@ -41,101 +53,170 @@ lv_obj_t * cr_btn = NULL;
 lv_obj_t * cr_Image = NULL;
 lv_obj_t * cr_Roller = NULL;
 
-lv_obj_t * us_btn = NULL;
-lv_obj_t * us_Image = NULL;
-lv_obj_t * us_Roller = NULL;
-
-bool Boot_Key_Flag = false;
-bool Lora_Transmission_Mode = false; // Default to receive mode
-volatile radio_modem_t radio_modem = RADIO_MODEM_GFSK;
-volatile bool radio_reconfigure_requested = false;
-volatile float radio_frequency_mhz = 868.0f;
-volatile uint8_t radio_lora_spreading_factor = 7;
-volatile float radio_lora_bandwidth_khz = 125.0f;
-volatile uint8_t radio_lora_coding_rate = 5;
-
-pcf85063a_datetime_t time_info;
-bsp_bat_info_t bat_info;
-
-// Cached last values to avoid redundant radio reconfiguration
-static uint8_t  last_md       = RADIO_MODEM_GFSK;
-static float    last_freq_mhz = 868.0;
-static uint8_t  last_sf       = 2;
-static uint8_t  last_bw       = 1;
-static uint8_t  last_cr       = 1;
-static uint8_t  last_us       = 2;
-
-typedef struct {
-    float frequency_hz;        // Operating frequency in MHz
-    int8_t tx_power_dbm;       // TX output power in dBm
-    uint8_t spreading_factor;  // Spreading factor
-    float bandwidth;           // Bandwidth in kHz
-    uint8_t coding_rate;       // Coding rate denominator
-    uint32_t pa_ramp_time;     // PA ramp time in microseconds
-} lora_config_t;
-
-lora_config_t lora_config = {
-    .frequency_hz    = 868.0,  // 868MHz
-    .tx_power_dbm    = 22,                 // Transmit power
-    .spreading_factor= 7,
-    .bandwidth       = 125.0,
-    .coding_rate     = 5,
-    .pa_ramp_time    = 48
-};
-
-const uint8_t sf_values[] = {
-    5,
-    6,
-    7,
-    8,
-    9,
-    10,
-    11,
-    12
-};
-
-const float bw_values[] = {
-    62.5,
-    125.0,
-    250.0,
-    500.0
-};
-
-const uint32_t pa_ramp_time_values[] = {
-    16,
-    32,
-    48,
-    64,
-    80,
-    96,
-    112,
-    128,
-    144,
-    160,
-    176,
-    192,
-    208,
-    240,
-    272,
-    304
-};
+lv_obj_t * pwr_btn = NULL;
+lv_obj_t * pwr_Image = NULL;
+lv_obj_t * pwr_Roller = NULL;
 
 char buf[256];
 
 uint8_t current_page = 0;  
 
-
-static void peripheral_lock()
+// The monochrome panel mapping is inverted, so helpers express logical UI colors.
+static lv_color_t ui_black(void)
 {
-    if (peripheral_mutex) {
-        xSemaphoreTake(peripheral_mutex, portMAX_DELAY);
-    }
+    return lv_color_hex(0xFFFFFF);
 }
 
-static void peripheral_unlock()
+static lv_color_t ui_white(void)
 {
-    if (peripheral_mutex) {
-        xSemaphoreGive(peripheral_mutex);
+    return lv_color_hex(0x000000);
+}
+
+static void style_text(lv_obj_t *obj, const lv_font_t *font)
+{
+    lv_obj_set_style_text_color(obj, ui_white(), 0);
+    lv_obj_set_style_text_font(obj, font, 0);
+}
+
+static void style_panel(lv_obj_t *obj)
+{
+    lv_obj_set_style_bg_color(obj, ui_black(), 0);
+    lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(obj, ui_white(), 0);
+    lv_obj_set_style_border_width(obj, 1, 0);
+    lv_obj_set_style_radius(obj, 0, 0);
+    lv_obj_set_style_pad_all(obj, 0, 0);
+}
+
+static void style_radio_button(lv_obj_t *btn)
+{
+    lv_obj_remove_style_all(btn);
+    style_panel(btn);
+    lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_outline_color(btn, ui_white(), LV_STATE_FOCUSED);
+    lv_obj_set_style_outline_width(btn, 1, LV_STATE_FOCUSED);
+    lv_obj_set_style_outline_pad(btn, 1, LV_STATE_FOCUSED);
+    lv_obj_set_style_shadow_width(btn, 0, 0);
+}
+
+static void style_roller_selected(lv_obj_t *roller, lv_style_selector_t selector)
+{
+    lv_obj_set_style_bg_color(roller, ui_white(), selector);
+    lv_obj_set_style_bg_opa(roller, LV_OPA_COVER, selector);
+    lv_obj_set_style_bg_grad_dir(roller, LV_GRAD_DIR_NONE, selector);
+    lv_obj_set_style_bg_image_opa(roller, LV_OPA_TRANSP, selector);
+    lv_obj_set_style_text_color(roller, ui_black(), selector);
+    lv_obj_set_style_text_opa(roller, LV_OPA_COVER, selector);
+    lv_obj_set_style_text_font(roller, &lv_font_unscii_8, selector);
+    lv_obj_set_style_border_width(roller, 0, selector);
+    lv_obj_set_style_radius(roller, 0, selector);
+    lv_obj_set_style_shadow_width(roller, 0, selector);
+    lv_obj_set_style_outline_width(roller, 0, selector);
+}
+
+static lv_style_selector_t ui_part_state(lv_part_t part, lv_state_t state = static_cast<lv_state_t>(0))
+{
+    return static_cast<lv_style_selector_t>(part) | static_cast<lv_style_selector_t>(state);
+}
+
+static void style_roller(lv_obj_t *roller)
+{
+    lv_obj_remove_style_all(roller);
+    style_panel(roller);
+    lv_obj_set_style_text_color(roller, ui_white(), 0);
+    lv_obj_set_style_text_font(roller, &lv_font_unscii_8, 0);
+    lv_obj_set_style_text_align(roller, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_line_space(roller, 0, 0);
+    lv_obj_set_style_anim_duration(roller, 200, 0);
+    lv_obj_set_style_outline_width(roller, 0, 0);
+    style_roller_selected(roller, ui_part_state(LV_PART_SELECTED));
+    style_roller_selected(roller, ui_part_state(LV_PART_SELECTED, LV_STATE_FOCUSED));
+    style_roller_selected(roller, ui_part_state(LV_PART_SELECTED, LV_STATE_EDITED));
+    style_roller_selected(roller, ui_part_state(LV_PART_SELECTED, LV_STATE_FOCUS_KEY));
+}
+
+static void ui_refresh_ptt_status(void)
+{
+    if (!ptt_btn || !label_ptt) return;
+
+    if (Lora_Transmission_Mode) {
+        lv_label_set_text(label_ptt, "TX");
+        lv_obj_set_style_bg_color(ptt_btn, ui_white(), 0);
+        lv_obj_set_style_bg_opa(ptt_btn, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(ptt_btn, ui_white(), 0);
+        lv_obj_set_style_text_color(ptt_btn, ui_black(), 0);
+        lv_obj_set_style_text_color(label_ptt, ui_black(), 0);
+        lv_obj_set_style_text_opa(label_ptt, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(label_ptt, ui_white(), 0);
+        lv_obj_set_style_bg_opa(label_ptt, LV_OPA_COVER, 0);
+    } else {
+        lv_label_set_text(label_ptt, "RX");
+        lv_obj_set_style_bg_color(ptt_btn, ui_black(), 0);
+        lv_obj_set_style_bg_opa(ptt_btn, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(ptt_btn, ui_white(), 0);
+        lv_obj_set_style_text_color(ptt_btn, ui_white(), 0);
+        lv_obj_set_style_text_color(label_ptt, ui_white(), 0);
+        lv_obj_set_style_text_opa(label_ptt, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(label_ptt, ui_black(), 0);
+        lv_obj_set_style_bg_opa(label_ptt, LV_OPA_TRANSP, 0);
+    }
+
+    lv_obj_center(label_ptt);
+    lv_obj_invalidate(ptt_btn);
+}
+
+// Keep the mode, frequency, parameter row and tool icons in one refresh path.
+static void ui_refresh_radio_status(void)
+{
+    int freq_mhz = (int)(radio_frequency_mhz + 0.5f);
+
+    if (label_mode) {
+        snprintf(buf, sizeof(buf), "%c-%s",
+                 radio_modem == RADIO_MODEM_GFSK ? 'G' : 'L',
+                 radio_band_label());
+        lv_label_set_text(label_mode, buf);
+    }
+
+    if (label_freq) {
+        snprintf(buf, sizeof(buf), "%03d.0", freq_mhz);
+        lv_label_set_text(label_freq, buf);
+    }
+
+    if (label_unit) {
+        lv_label_set_text(label_unit, "MHz");
+    }
+
+    if (label_params) {
+        if (radio_modem == RADIO_MODEM_LORA) {
+            snprintf(buf, sizeof(buf), "SF%u BW%s CR4/%u P%d",
+                     radio_lora_spreading_factor,
+                     radio_format_bandwidth(radio_lora_bandwidth_khz),
+                     radio_lora_coding_rate,
+                     (int)radio_tx_power_dbm);
+        } else {
+            char br[16];
+            char dev[16];
+            char rx[16];
+            radio_format_decimal(br, sizeof(br), radio_gfsk_bit_rate_kbps);
+            radio_format_decimal(dev, sizeof(dev), radio_gfsk_freq_dev_khz);
+            radio_format_decimal(rx, sizeof(rx), radio_gfsk_rx_bw_khz);
+            snprintf(buf, sizeof(buf), "BR%s DEV%s RX%s P%d",
+                     br, dev, rx, (int)radio_tx_power_dbm);
+        }
+        lv_label_set_text(label_params, buf);
+    }
+
+    if (md_Image) {
+        lv_image_set_src(md_Image, (radio_modem == RADIO_MODEM_GFSK) ? &MD_G : &MD_L);
+    }
+    if (sf_Image) {
+        lv_image_set_src(sf_Image, (radio_modem == RADIO_MODEM_GFSK) ? &ICON_BR : &SF);
+    }
+    if (bw_Image) {
+        lv_image_set_src(bw_Image, (radio_modem == RADIO_MODEM_GFSK) ? &ICON_DV : &BW);
+    }
+    if (cr_Image) {
+        lv_image_set_src(cr_Image, (radio_modem == RADIO_MODEM_GFSK) ? &ICON_RX : &CR);
     }
 }
 
@@ -200,10 +281,9 @@ void switch_page(uint8_t target_page)
 // Button event handler
 static void Button_event_cb(void *arg, void *data)
 {
+    (void)data;
     button_event_t event = iot_button_get_event((button_handle_t)arg);
-    int button_id = (int)(intptr_t)data;
 
-    // printf("%s :%d\r\n", iot_button_get_event_str(event), button_id);
     if (event == BUTTON_PRESS_DOWN || event == BUTTON_PRESS_UP) {
         Boot_Key_Flag = (gpio_get_level(PTT_KEY_GPIO) == 0);
     }
@@ -222,14 +302,33 @@ static void roller_apply_and_exit(lv_obj_t *roller, lv_obj_t *btn)
 }
 
 // Open a roller and switch to setting page
-static void open_roller(lv_obj_t *roller)
+static void open_roller(lv_obj_t *roller, const char *title)
 {
     lv_obj_remove_flag(roller, LV_OBJ_FLAG_HIDDEN);
 
     // Save target for focus after animation
     target_roller = roller;
 
+    if (label_setting_title) {
+        lv_label_set_text(label_setting_title, title);
+    }
+
     switch_page(1);
+}
+
+static void set_roller_options(lv_obj_t *roller, const char *options, uint8_t selected)
+{
+    lv_roller_set_options(roller, options, LV_ROLLER_MODE_NORMAL);
+    lv_roller_set_selected(roller, selected, LV_ANIM_OFF);
+}
+
+static void refresh_frequency_roller_options(void)
+{
+    if (!hz_Roller) {
+        return;
+    }
+
+    set_roller_options(hz_Roller, radio_frequency_options(), radio_freq_to_index(last_freq_mhz));
 }
 
 // Frequency selection handler
@@ -243,52 +342,76 @@ static void md_roller_event_cb(lv_event_t * e)
         radio_reconfigure_requested = true;
         lv_image_set_src(md_Image, (radio_modem == RADIO_MODEM_GFSK) ? &MD_G : &MD_L);
         last_md = index;
+        radio_settings_save();
     }
 
+    ui_refresh_radio_status();
     roller_apply_and_exit(md_Roller, md_btn);
+}
+
+static void band_roller_event_cb(lv_event_t * e)
+{
+    lv_obj_t * roller = (lv_obj_t *)lv_event_get_target(e);
+    uint8_t index = lv_roller_get_selected(roller);
+    radio_band_t next_band = (index == RADIO_BAND_LF) ? RADIO_BAND_LF : RADIO_BAND_HF;
+
+    if (next_band != radio_band) {
+        radio_select_band(next_band);
+        radio_reconfigure_requested = true;
+        radio_settings_save();
+        refresh_frequency_roller_options();
+    }
+
+    ui_refresh_radio_status();
+    roller_apply_and_exit(band_Roller, mode_btn);
 }
 
 // Frequency selection handler
 static void hz_roller_event_cb(lv_event_t * e)
 {
     lv_obj_t * roller = (lv_obj_t *)lv_event_get_target(e);
-
-    char buf[16];
-    lv_roller_get_selected_str(roller, buf, sizeof(buf));
-
-    int freq_mhz = atoi(buf);
+    float freq_mhz = radio_index_to_freq(lv_roller_get_selected(roller));
 
     // Only apply if value changed
     if (freq_mhz != last_freq_mhz) {
-        lora_config.frequency_hz = freq_mhz;
-        radio_frequency_mhz = (float)freq_mhz;
-        peripheral_lock();
-        radio.setFrequency(freq_mhz);
-        peripheral_unlock();
-
-        last_freq_mhz = freq_mhz;
+        radio_set_frequency_mhz(freq_mhz);
+        radio_reconfigure_requested = true;
+        radio_settings_save();
     }
 
+    ui_refresh_radio_status();
     roller_apply_and_exit(hz_Roller, hz_btn);
 }
 
 // Spreading factor selection handler
+// The same three parameter rollers map to LoRa SF/BW/CR or GFSK BR/DEV/RXBW.
 static void sf_roller_event_cb(lv_event_t * e)
 {
     lv_obj_t * roller = (lv_obj_t *)lv_event_get_target(e);
     uint8_t index = lv_roller_get_selected(roller);
 
-    if (index != last_sf) {
-        lora_config.spreading_factor = sf_values[index];
-        radio_lora_spreading_factor = lora_config.spreading_factor;
-        if (radio_modem == RADIO_MODEM_LORA) {
+    if (radio_modem == RADIO_MODEM_LORA) {
+        if (index >= SF_OPTION_COUNT) index = last_sf;
+        if (index != last_sf) {
+            lora_config.spreading_factor = sf_values[index];
+            radio_lora_spreading_factor = lora_config.spreading_factor;
             peripheral_lock();
             radio.setSpreadingFactor(lora_config.spreading_factor);
             peripheral_unlock();
+            last_sf = index;
+            radio_settings_save();
         }
-        last_sf = index;
+    } else {
+        if (index >= GFSK_BR_OPTION_COUNT) index = last_gfsk_br;
+        if (index != last_gfsk_br) {
+            radio_gfsk_bit_rate_kbps = gfsk_br_values[index];
+            radio_reconfigure_requested = true;
+            last_gfsk_br = index;
+            radio_settings_save();
+        }
     }
 
+    ui_refresh_radio_status();
     roller_apply_and_exit(sf_Roller, sf_btn);
 }
 
@@ -298,17 +421,28 @@ static void bw_roller_event_cb(lv_event_t * e)
 
     // Get current selected index
     uint8_t index = lv_roller_get_selected(roller);
-    if (index != last_bw) {
-        lora_config.bandwidth = bw_values[index];
-        radio_lora_bandwidth_khz = lora_config.bandwidth;
-        if (radio_modem == RADIO_MODEM_LORA) {
+    if (radio_modem == RADIO_MODEM_LORA) {
+        if (index >= BW_OPTION_COUNT) index = last_bw;
+        if (index != last_bw) {
+            lora_config.bandwidth = bw_values[index];
+            radio_lora_bandwidth_khz = lora_config.bandwidth;
             peripheral_lock();
             radio.setBandwidth(lora_config.bandwidth);
             peripheral_unlock();
+            last_bw = index;
+            radio_settings_save();
         }
-        last_bw = index;
-    };
+    } else {
+        if (index >= GFSK_DEV_OPTION_COUNT) index = last_gfsk_dev;
+        if (index != last_gfsk_dev) {
+            radio_gfsk_freq_dev_khz = gfsk_dev_values[index];
+            radio_reconfigure_requested = true;
+            last_gfsk_dev = index;
+            radio_settings_save();
+        }
+    }
     
+    ui_refresh_radio_status();
     roller_apply_and_exit(bw_Roller, bw_btn);
 }
 
@@ -318,42 +452,64 @@ static void cr_roller_event_cb(lv_event_t * e)
 
     // Get current selected index
     uint8_t index = lv_roller_get_selected(roller);
-    if (index != last_cr) {
-        lora_config.coding_rate = index + 4;
-        radio_lora_coding_rate = lora_config.coding_rate;
-        if (radio_modem == RADIO_MODEM_LORA) {
+    if (radio_modem == RADIO_MODEM_LORA) {
+        if (index >= CR_OPTION_COUNT) index = last_cr;
+        if (index != last_cr) {
+            lora_config.coding_rate = index + 4;
+            radio_lora_coding_rate = lora_config.coding_rate;
             peripheral_lock();
             radio.setCodingRate(lora_config.coding_rate);
             peripheral_unlock();
+            last_cr = index;
+            radio_settings_save();
         }
-        last_cr = index;
-    };
+    } else {
+        if (index >= GFSK_RX_OPTION_COUNT) index = last_gfsk_rx;
+        if (index != last_gfsk_rx) {
+            radio_gfsk_rx_bw_khz = gfsk_rx_bw_values[index];
+            radio_reconfigure_requested = true;
+            last_gfsk_rx = index;
+            radio_settings_save();
+        }
+    }
     
+    ui_refresh_radio_status();
     roller_apply_and_exit(cr_Roller, cr_btn);
 }
 
-static void us_roller_event_cb(lv_event_t * e)
+static void pwr_roller_event_cb(lv_event_t * e)
 {
     lv_obj_t * roller = (lv_obj_t *)lv_event_get_target(e);
 
     // Get current selected index
     uint8_t index = lv_roller_get_selected(roller);
-    if (index != last_us) {
-        lora_config.pa_ramp_time = pa_ramp_time_values[index];
+    if (index != last_pwr) {
+        lora_config.tx_power_dbm = tx_power_values[index];
+        radio_tx_power_dbm = lora_config.tx_power_dbm;
         peripheral_lock();
-        radio.setOutputPower(lora_config.tx_power_dbm, true,lora_config.pa_ramp_time);
+        radio.setOutputPower(lora_config.tx_power_dbm, true, lora_config.pa_ramp_time);
         peripheral_unlock();
-        last_us = index;
+        last_pwr = index;
+        radio_settings_save();
     };
     
-    roller_apply_and_exit(us_Roller, us_btn);
+    ui_refresh_radio_status();
+    roller_apply_and_exit(pwr_Roller, pwr_btn);
 }
 
 // Open modem selector
 static void md_btn_event_cb(lv_event_t * e)
 {
     if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
-        open_roller(md_Roller);
+        open_roller(md_Roller, "MODE");
+    }
+}
+
+static void band_btn_event_cb(lv_event_t * e)
+{
+    if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
+        set_roller_options(band_Roller, RADIO_BAND_OPTIONS, last_band);
+        open_roller(band_Roller, "BAND");
     }
 }
 
@@ -361,7 +517,8 @@ static void md_btn_event_cb(lv_event_t * e)
 static void hz_btn_event_cb(lv_event_t * e)
 {
     if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
-        open_roller(hz_Roller);
+        refresh_frequency_roller_options();
+        open_roller(hz_Roller, "FREQ");
     }
 }
 
@@ -369,7 +526,13 @@ static void hz_btn_event_cb(lv_event_t * e)
 static void sf_btn_event_cb(lv_event_t * e)
 {
     if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
-        open_roller(sf_Roller);
+        if (radio_modem == RADIO_MODEM_LORA) {
+            set_roller_options(sf_Roller, LORA_SF_OPTIONS, last_sf);
+            open_roller(sf_Roller, "SPREAD");
+        } else {
+            set_roller_options(sf_Roller, GFSK_BR_OPTIONS, last_gfsk_br);
+            open_roller(sf_Roller, "BITRATE");
+        }
     }
 }
 
@@ -377,46 +540,71 @@ static void bw_btn_event_cb(lv_event_t * e)
 {
 
     if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
-        open_roller(bw_Roller);
+        if (radio_modem == RADIO_MODEM_LORA) {
+            set_roller_options(bw_Roller, LORA_BW_OPTIONS, last_bw);
+            open_roller(bw_Roller, "BAND");
+        } else {
+            set_roller_options(bw_Roller, GFSK_DEV_OPTIONS, last_gfsk_dev);
+            open_roller(bw_Roller, "DEVIAT");
+        }
     }
 }
 
 static void cr_btn_event_cb(lv_event_t * e)
 {
     if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
-        open_roller(cr_Roller);
+        if (radio_modem == RADIO_MODEM_LORA) {
+            set_roller_options(cr_Roller, LORA_CR_OPTIONS, last_cr);
+            open_roller(cr_Roller, "CODING");
+        } else {
+            set_roller_options(cr_Roller, GFSK_RX_OPTIONS, last_gfsk_rx);
+            open_roller(cr_Roller, "RXBW");
+        }
     }
 }
 
-static void us_btn_event_cb(lv_event_t * e)
+static void pwr_btn_event_cb(lv_event_t * e)
 {
     if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
-        open_roller(us_Roller);
+        open_roller(pwr_Roller, "PWR");
     }
 }
 
+// Build a compact two-page 128x64 radio UI: dashboard plus roller settings.
 void ui_create_pages(void)
 {
     lv_obj_t *scr = lv_screen_active();
+    lv_obj_set_style_bg_color(scr, ui_black(), 0);
+    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
     lv_obj_set_style_text_font(scr, &lv_font_unscii_8, 0);
 
-    /* ===== Top: Time + Battery ===== */
+    /* ===== Fixed status bar ===== */
     label_rtc = lv_label_create(scr);
-    lv_obj_align(label_rtc, LV_ALIGN_TOP_LEFT, 2, 0);
-    lv_label_set_text(label_rtc,"12:00:00");
+    lv_obj_remove_style_all(label_rtc);
+    lv_obj_set_pos(label_rtc, 2, 0);
+    style_text(label_rtc, &lv_font_unscii_8);
+    lv_label_set_text(label_rtc,"--:--");
 
     label_bat = lv_label_create(scr);
-    lv_obj_align(label_bat, LV_ALIGN_TOP_RIGHT, -15, 0);
-    lv_label_set_text(label_bat,"100%%");
-    
+    lv_obj_remove_style_all(label_bat);
+    lv_obj_set_pos(label_bat, 82, 0);
+    lv_obj_set_size(label_bat, 32, 10);
+    style_text(label_bat, &lv_font_unscii_8);
+    lv_obj_set_style_text_align(label_bat, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_label_set_long_mode(label_bat, LV_LABEL_LONG_MODE_CLIP);
+    lv_label_set_text(label_bat,"--%");
+
     bat_Image = lv_image_create(scr);
-    lv_obj_align(bat_Image, LV_ALIGN_TOP_RIGHT, -2, 0);
+    lv_obj_set_pos(bat_Image, 116, 0);
     lv_image_set_src(bat_Image, &Battery4_png);
 
     lv_obj_t *ui_layer = lv_obj_create(scr);
     lv_obj_remove_style_all(ui_layer);
     lv_obj_set_size(ui_layer, 128, 64);
     lv_obj_align(ui_layer, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_move_foreground(label_rtc);
+    lv_obj_move_foreground(label_bat);
+    lv_obj_move_foreground(bat_Image);
 
     /* ===== Page1 ===== */
     page1 = lv_obj_create(ui_layer);
@@ -433,14 +621,55 @@ void ui_create_pages(void)
     /* Bind group */
     lv_indev_set_group(indev, g);
 
-    /* ===== PTT ===== */
+    /* ===== Radio dashboard ===== */
     ptt_btn = lv_btn_create(page1);
-    lv_obj_set_size(ptt_btn, 100, 12);
-    lv_obj_align(ptt_btn, LV_ALIGN_CENTER, 0, -5);
+    style_radio_button(ptt_btn);
+    lv_obj_set_size(ptt_btn, 27, 17);
+    lv_obj_set_pos(ptt_btn, 2, 14);
+    lv_obj_remove_flag(ptt_btn, LV_OBJ_FLAG_CLICKABLE);
 
     label_ptt = lv_label_create(ptt_btn);
+    lv_obj_remove_style_all(label_ptt);
     lv_obj_center(label_ptt);
-    lv_label_set_text(label_ptt,"Receiving");
+    style_text(label_ptt, &lv_font_unscii_8);
+    lv_label_set_text(label_ptt,"RX");
+
+    label_freq = lv_label_create(page1);
+    lv_obj_set_pos(label_freq, 35, 11);
+    style_text(label_freq, &lv_font_montserrat_20);
+    lv_label_set_text(label_freq, "868.0");
+
+    label_unit = lv_label_create(page1);
+    lv_obj_set_pos(label_unit, 101, 24);
+    style_text(label_unit, &lv_font_unscii_8);
+    lv_label_set_text(label_unit, "MHz");
+
+    mode_btn = lv_btn_create(page1);
+    lv_obj_remove_style_all(mode_btn);
+    lv_obj_set_pos(mode_btn, 96, 13);
+    lv_obj_set_size(mode_btn, 30, 10);
+    lv_obj_add_flag(mode_btn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_opa(mode_btn, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(mode_btn, 0, 0);
+    lv_obj_set_style_outline_color(mode_btn, ui_white(), LV_STATE_FOCUSED);
+    lv_obj_set_style_outline_width(mode_btn, 1, LV_STATE_FOCUSED);
+    lv_obj_set_style_outline_pad(mode_btn, 1, LV_STATE_FOCUSED);
+    lv_obj_add_event_cb(mode_btn, band_btn_event_cb, LV_EVENT_CLICKED, NULL);
+
+    label_mode = lv_label_create(mode_btn);
+    lv_obj_remove_style_all(label_mode);
+    lv_obj_set_size(label_mode, 30, 10);
+    lv_obj_set_pos(label_mode, 0, 0);
+    style_text(label_mode, &lv_font_unscii_8);
+    lv_label_set_long_mode(label_mode, LV_LABEL_LONG_MODE_CLIP);
+    lv_label_set_text(label_mode, "G-HF");
+
+    label_params = lv_label_create(page1);
+    lv_obj_set_size(label_params, 124, 10);
+    lv_obj_set_pos(label_params, 2, 34);
+    style_text(label_params, &lv_font_unscii_8);
+    lv_label_set_long_mode(label_params, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+    lv_label_set_text(label_params, "BR50 DEV25 RX117 P22");
     
     const button_config_t btn_cfg = {0};
     button_gpio_config_t btn_gpio_cfg = {
@@ -459,8 +688,9 @@ void ui_create_pages(void)
 
     //MD
     md_btn = lv_btn_create(page1);
-    lv_obj_set_size(md_btn, 16, 16);
-    lv_obj_align(md_btn, LV_ALIGN_BOTTOM_LEFT, 5, -5);
+    style_radio_button(md_btn);
+    lv_obj_set_size(md_btn, 19, 16);
+    lv_obj_set_pos(md_btn, 2, 46);
 
     md_Image = lv_image_create(md_btn);
     lv_obj_center(md_Image);
@@ -470,8 +700,9 @@ void ui_create_pages(void)
 
     //Hz
     hz_btn = lv_btn_create(page1);
-    lv_obj_set_size(hz_btn, 16, 16);
-    lv_obj_align(hz_btn, LV_ALIGN_BOTTOM_LEFT, 26, -5);
+    style_radio_button(hz_btn);
+    lv_obj_set_size(hz_btn, 19, 16);
+    lv_obj_set_pos(hz_btn, 23, 46);
 
     hz_Image = lv_image_create(hz_btn);
     lv_obj_center(hz_Image);
@@ -481,47 +712,51 @@ void ui_create_pages(void)
     
     //SF
     sf_btn = lv_btn_create(page1);
-    lv_obj_set_size(sf_btn, 16, 16);
-    lv_obj_align(sf_btn, LV_ALIGN_BOTTOM_LEFT, 47, -5);
+    style_radio_button(sf_btn);
+    lv_obj_set_size(sf_btn, 19, 16);
+    lv_obj_set_pos(sf_btn, 44, 46);
 
     sf_Image = lv_image_create(sf_btn);
     lv_obj_center(sf_Image);
-    lv_image_set_src(sf_Image, &SF);
+    lv_image_set_src(sf_Image, &ICON_BR);
 
     lv_obj_add_event_cb(sf_btn, sf_btn_event_cb, LV_EVENT_CLICKED, NULL);
 
     //BW
     bw_btn = lv_btn_create(page1);
-    lv_obj_set_size(bw_btn, 16, 16);
-    lv_obj_align(bw_btn, LV_ALIGN_BOTTOM_LEFT, 68, -5);
+    style_radio_button(bw_btn);
+    lv_obj_set_size(bw_btn, 19, 16);
+    lv_obj_set_pos(bw_btn, 65, 46);
 
     bw_Image = lv_image_create(bw_btn);
     lv_obj_center(bw_Image);
-    lv_image_set_src(bw_Image, &BW);
+    lv_image_set_src(bw_Image, &ICON_DV);
 
     lv_obj_add_event_cb(bw_btn, bw_btn_event_cb, LV_EVENT_CLICKED, NULL);
 
     //CR
     cr_btn = lv_btn_create(page1);
-    lv_obj_set_size(cr_btn, 16, 16);
-    lv_obj_align(cr_btn, LV_ALIGN_BOTTOM_LEFT, 89, -5);
+    style_radio_button(cr_btn);
+    lv_obj_set_size(cr_btn, 19, 16);
+    lv_obj_set_pos(cr_btn, 86, 46);
 
     cr_Image = lv_image_create(cr_btn);
     lv_obj_center(cr_Image);
-    lv_image_set_src(cr_Image, &CR);
+    lv_image_set_src(cr_Image, &ICON_RX);
 
     lv_obj_add_event_cb(cr_btn, cr_btn_event_cb, LV_EVENT_CLICKED, NULL);
 
-    //US
-    us_btn = lv_btn_create(page1);
-    lv_obj_set_size(us_btn, 16, 16);
-    lv_obj_align(us_btn, LV_ALIGN_BOTTOM_LEFT, 110, -5);
+    //PWR
+    pwr_btn = lv_btn_create(page1);
+    style_radio_button(pwr_btn);
+    lv_obj_set_size(pwr_btn, 19, 16);
+    lv_obj_set_pos(pwr_btn, 107, 46);
 
-    us_Image = lv_image_create(us_btn);
-    lv_obj_center(us_Image);
-    lv_image_set_src(us_Image, &US);
+    pwr_Image = lv_image_create(pwr_btn);
+    lv_obj_center(pwr_Image);
+    lv_image_set_src(pwr_Image, &PW);
 
-    lv_obj_add_event_cb(us_btn, us_btn_event_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(pwr_btn, pwr_btn_event_cb, LV_EVENT_CLICKED, NULL);
 
     // lv_group_add_obj(g, ptt_btn);
     lv_group_add_obj(g, md_btn);
@@ -529,7 +764,8 @@ void ui_create_pages(void)
     lv_group_add_obj(g, sf_btn);
     lv_group_add_obj(g, bw_btn);
     lv_group_add_obj(g, cr_btn);
-    lv_group_add_obj(g, us_btn);
+    lv_group_add_obj(g, pwr_btn);
+    lv_group_add_obj(g, mode_btn);
     
     /* Default focus */
     lv_group_focus_obj(md_btn);
@@ -538,37 +774,54 @@ void ui_create_pages(void)
     page2 = lv_obj_create(ui_layer);
     lv_obj_remove_style_all(page2);
     lv_obj_set_size(page2, 128, 64);
+    lv_obj_set_style_bg_color(page2, ui_black(), 0);
+    lv_obj_set_style_bg_opa(page2, LV_OPA_COVER, 0);
 
     /* Initially placed at the bottom of the screen (hidden) */
     lv_obj_align(page2, LV_ALIGN_TOP_LEFT, 0, 64);
 
+    label_setting_title = lv_label_create(page2);
+    lv_obj_set_pos(label_setting_title, 2, 11);
+    style_text(label_setting_title, &lv_font_unscii_8);
+    lv_label_set_text(label_setting_title, "MODE");
+
     //MD
     md_Roller = lv_roller_create(page2);
-    lv_obj_set_size(md_Roller, 84, 40);
-    lv_obj_align(md_Roller, LV_ALIGN_BOTTOM_MID, 0, -10);
+    style_roller(md_Roller);
+    lv_obj_set_size(md_Roller, 94, 36);
+    lv_obj_set_pos(md_Roller, 17, 26);
     lv_roller_set_options(md_Roller,
                           "GFSK\nLoRa",
                           LV_ROLLER_MODE_NORMAL);
-    lv_roller_set_selected(md_Roller, 0, LV_ANIM_OFF);
+    lv_roller_set_selected(md_Roller, last_md, LV_ANIM_OFF);
     lv_obj_add_event_cb(md_Roller, md_roller_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
     lv_obj_add_flag(md_Roller, LV_OBJ_FLAG_HIDDEN);
 
     lv_group_add_obj(g, md_Roller);
+
+    //BAND
+    band_Roller = lv_roller_create(page2);
+    style_roller(band_Roller);
+    lv_obj_set_size(band_Roller, 94, 36);
+    lv_obj_set_pos(band_Roller, 17, 26);
+    lv_roller_set_options(band_Roller,
+                          RADIO_BAND_OPTIONS,
+                          LV_ROLLER_MODE_NORMAL);
+    lv_roller_set_selected(band_Roller, last_band, LV_ANIM_OFF);
+    lv_obj_add_event_cb(band_Roller, band_roller_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_flag(band_Roller, LV_OBJ_FLAG_HIDDEN);
+
+    lv_group_add_obj(g, band_Roller);
     
     //Hz
     hz_Roller = lv_roller_create(page2);
-    lv_obj_set_size(hz_Roller, 84, 40);
-    lv_obj_align(hz_Roller, LV_ALIGN_BOTTOM_MID, 0, -10);
-#if LR1121_HF
+    style_roller(hz_Roller);
+    lv_obj_set_size(hz_Roller, 94, 36);
+    lv_obj_set_pos(hz_Roller, 17, 26);
     lv_roller_set_options(hz_Roller,
-                          "864\n865\n866\n867\n868\n869\n870\n871\n872\n873\n874\n875\n876\n877\n878\n879\n880\n881\n882\n883\n884\n885\n886\n887\n888\n889\n890\n891\n892\n893\n894\n895\n896\n897\n898\n899\n900\n901\n902\n903\n904\n905\n906\n907\n908\n909\n910\n911\n912\n913\n914\n915\n916\n917\n918\n919\n920\n921\n922\n923",
+                          radio_frequency_options(),
                           LV_ROLLER_MODE_NORMAL);
-#else
-    lv_roller_set_options(hz_Roller,
-                        "864\n865\n866\n867\n868\n869\n870\n871\n872\n873\n874\n875\n876\n877\n878\n879\n880\n881\n882\n883\n884\n885\n886\n887\n888\n889\n890\n891\n892\n893\n894\n895\n896\n897\n898\n899\n900\n901\n902\n903\n904\n905\n906\n907\n908\n909\n910\n911\n912\n913\n914\n915\n916\n917\n918\n919\n920\n921\n922\n923",
-                        LV_ROLLER_MODE_NORMAL);
-#endif
-    lv_roller_set_selected(hz_Roller, 4, LV_ANIM_OFF);
+    lv_roller_set_selected(hz_Roller, radio_freq_to_index(last_freq_mhz), LV_ANIM_OFF);
     lv_obj_add_event_cb(hz_Roller, hz_roller_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
     lv_obj_add_flag(hz_Roller, LV_OBJ_FLAG_HIDDEN);
 
@@ -576,22 +829,14 @@ void ui_create_pages(void)
     
     //SF
     sf_Roller = lv_roller_create(page2);
-    lv_obj_set_size(sf_Roller, 84, 40);
-    lv_obj_align(sf_Roller, LV_ALIGN_BOTTOM_MID, 0, -10);
+    style_roller(sf_Roller);
+    lv_obj_set_size(sf_Roller, 94, 36);
+    lv_obj_set_pos(sf_Roller, 17, 26);
     // Roller text display
-    const char *sf_options =
-        "SF5\n"
-        "SF6\n"
-        "SF7\n"
-        "SF8\n"
-        "SF9\n"
-        "SF10\n"
-        "SF11\n"
-        "SF12";    
     lv_roller_set_options(sf_Roller,
-                          sf_options,
+                          GFSK_BR_OPTIONS,
                           LV_ROLLER_MODE_NORMAL);
-    lv_roller_set_selected(sf_Roller, 2, LV_ANIM_OFF);
+    lv_roller_set_selected(sf_Roller, last_gfsk_br, LV_ANIM_OFF);
     lv_obj_add_event_cb(sf_Roller, sf_roller_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
     lv_obj_add_flag(sf_Roller, LV_OBJ_FLAG_HIDDEN);
 
@@ -599,18 +844,14 @@ void ui_create_pages(void)
 
     //BW
     bw_Roller = lv_roller_create(page2);
-    lv_obj_set_size(bw_Roller, 84, 40);
-    lv_obj_align(bw_Roller, LV_ALIGN_BOTTOM_MID, 0, -10);
+    style_roller(bw_Roller);
+    lv_obj_set_size(bw_Roller, 94, 36);
+    lv_obj_set_pos(bw_Roller, 17, 26);
     // Roller text display
-    const char *bw_options =
-        "62.50 kHz\n"
-        "125 kHz\n"
-        "250 kHz\n"
-        "500 kHz";    
     lv_roller_set_options(bw_Roller,
-                          bw_options,
+                          GFSK_DEV_OPTIONS,
                           LV_ROLLER_MODE_NORMAL);
-    lv_roller_set_selected(bw_Roller, 1, LV_ANIM_OFF);
+    lv_roller_set_selected(bw_Roller, last_gfsk_dev, LV_ANIM_OFF);
     lv_obj_add_event_cb(bw_Roller, bw_roller_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
     lv_obj_add_flag(bw_Roller, LV_OBJ_FLAG_HIDDEN);
 
@@ -618,57 +859,36 @@ void ui_create_pages(void)
     
     //CR
     cr_Roller = lv_roller_create(page2);
-    lv_obj_set_size(cr_Roller, 84, 40);
-    lv_obj_align(cr_Roller, LV_ALIGN_BOTTOM_MID, 0, -10);
+    style_roller(cr_Roller);
+    lv_obj_set_size(cr_Roller, 94, 36);
+    lv_obj_set_pos(cr_Roller, 17, 26);
     // Roller text display
-    const char *cr_options =
-        "NO CR\n"
-        "CR 45\n"
-        "CR 46\n"
-        "CR 47\n"
-        "CR 48\n"
-        "CR LI 45\n"
-        "CR LI 46\n"
-        "CR LI 48";    
     lv_roller_set_options(cr_Roller,
-                          cr_options,
+                          GFSK_RX_OPTIONS,
                           LV_ROLLER_MODE_NORMAL);
-    lv_roller_set_selected(cr_Roller, 1, LV_ANIM_OFF);
+    lv_roller_set_selected(cr_Roller, last_gfsk_rx, LV_ANIM_OFF);
     lv_obj_add_event_cb(cr_Roller, cr_roller_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
     lv_obj_add_flag(cr_Roller, LV_OBJ_FLAG_HIDDEN);
 
     lv_group_add_obj(g, cr_Roller);
 
-    //US
-    us_Roller = lv_roller_create(page2);
-    lv_obj_set_size(us_Roller, 84, 40);
-    lv_obj_align(us_Roller, LV_ALIGN_BOTTOM_MID, 0, -10);
+    //PWR
+    pwr_Roller = lv_roller_create(page2);
+    style_roller(pwr_Roller);
+    lv_obj_set_size(pwr_Roller, 94, 36);
+    lv_obj_set_pos(pwr_Roller, 17, 26);
     // Roller text display
-    const char *us_options =
-        "16 US\n"
-        "32 US\n"
-        "48 US\n"       
-        "64 US\n"
-        "80 US\n"
-        "96 US\n"
-        "112 US\n"
-        "128 US\n"
-        "144 US\n"
-        "160 US\n"
-        "176 US\n"
-        "192 US\n"
-        "208 US\n"
-        "240 US\n"
-        "272 US\n"
-        "304 US";    
-    lv_roller_set_options(us_Roller,
-                          us_options,
+    lv_roller_set_options(pwr_Roller,
+                          TX_POWER_OPTIONS,
                           LV_ROLLER_MODE_NORMAL);
-    lv_roller_set_selected(us_Roller, 2, LV_ANIM_OFF);
-    lv_obj_add_event_cb(us_Roller, us_roller_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    lv_obj_add_flag(us_Roller, LV_OBJ_FLAG_HIDDEN);
+    lv_roller_set_selected(pwr_Roller, last_pwr, LV_ANIM_OFF);
+    lv_obj_add_event_cb(pwr_Roller, pwr_roller_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_flag(pwr_Roller, LV_OBJ_FLAG_HIDDEN);
 
-    lv_group_add_obj(g, us_Roller);
+    lv_group_add_obj(g, pwr_Roller);
+
+    ui_refresh_radio_status();
+    ui_refresh_ptt_status();
 
 }
 
@@ -680,38 +900,61 @@ void ui_init(void)
 // Update PTT state label periodically
 void lvgl_ptt_timer_cb(lv_timer_t *timer)
 {
-    lv_label_set_text(label_ptt,
-        Lora_Transmission_Mode ? "Speaking" : "Receiving");
+    (void)timer;
+    ui_refresh_ptt_status();
 }
 
-// Update RTC time and battery status
-void lvgl_rtc_bat_timer_cb(lv_timer_t *timer)
+void ui_refresh_time_status(void)
 {
     // Format time string
     snprintf(buf, sizeof(buf),
-             "%02d:%02d:%02d",
+             "%02d:%02d",
              time_info.hour,
-             time_info.min,
-             time_info.sec);
+             time_info.min);
 
-    lv_label_set_text(label_rtc, buf);
+    if (label_rtc) {
+        lv_label_set_text(label_rtc, buf);
+    }
+}
 
+void ui_refresh_battery_status(void)
+{
     // Format battery percentage
-    snprintf(buf, sizeof(buf), "%u%%", bat_info.soc);
-    lv_label_set_text(label_bat, buf);
+    uint16_t soc = bat_info.soc > 100 ? 100 : bat_info.soc;
+    snprintf(buf, sizeof(buf), "%u%%", soc);
+    if (label_bat) {
+        lv_label_set_text(label_bat, buf);
+    }
+
+    if (!bat_Image) {
+        return;
+    }
 
     // Update battery icon based on charge state
-    if (bat_info.ma >= 0) {
+    if (bat_info.charging) {
         lv_image_set_src(bat_Image, &Charge_png); // charging
     } else {
-        if (bat_info.soc > 75) {
+        if (soc > 75) {
             lv_image_set_src(bat_Image, &Battery4_png);
-        } else if (bat_info.soc > 50) {
+        } else if (soc > 50) {
             lv_image_set_src(bat_Image, &Battery3_png);
-        } else if (bat_info.soc > 25) {
+        } else if (soc > 25) {
             lv_image_set_src(bat_Image, &Battery2_png);
         } else {
             lv_image_set_src(bat_Image, &Battery1_png);
         }
     }
+}
+
+void ui_refresh_status_bar(void)
+{
+    ui_refresh_time_status();
+    ui_refresh_battery_status();
+}
+
+// Update RTC time and battery status
+void lvgl_rtc_bat_timer_cb(lv_timer_t *timer)
+{
+    (void)timer;
+    ui_refresh_status_bar();
 }

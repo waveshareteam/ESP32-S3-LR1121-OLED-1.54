@@ -1,10 +1,13 @@
 /*
+ * SPDX-FileCopyrightText: 2026-2027 Waveshare Team
+ *
  * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Unlicense OR CC0-1.0
  */
 #include <stdio.h>
 #include <inttypes.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include "esp_adc/adc_oneshot.h"
 #include "driver/gpio.h"
@@ -94,16 +97,18 @@ static float get_pin_voltage(int i, adc_oneshot_unit_handle_t adc_handle, bool d
 }
 #endif //CONFIG_EXAMPLE_ENABLE_ADC_FEATURE
 
-static uint32_t get_cycles_until_pin_level(int i, int level, int timeout) {
+static uint32_t get_cycles_until_pin_level(int i, int level, int timeout)
+{
     uint32_t start = esp_cpu_get_cycle_count();
-    while(gpio_get_level(i) == !level && esp_cpu_get_cycle_count() - start < timeout) {
+    while (gpio_get_level(i) == !level && esp_cpu_get_cycle_count() - start < timeout) {
+        /* Keep this loop cycle-based because the diagnostic reports pin recovery time. */
         ;
     }
     uint32_t end = esp_cpu_get_cycle_count();
     return end - start;
 }
 
-void check_sd_card_pins(pin_configuration_t *config, const int pin_count)
+void check_sd_card_pins(const pin_configuration_t *config, int pin_count)
 {
     ESP_LOGI(TAG, "Testing SD pin connections and pullup strength");
     gpio_config_t io_conf = {};
@@ -113,16 +118,20 @@ void check_sd_card_pins(pin_configuration_t *config, const int pin_count)
         io_conf.pin_bit_mask = GPIO_INPUT_PIN_SEL(config->pins[i]);
         io_conf.pull_down_en = 0;
         io_conf.pull_up_en = 0;
-        gpio_config(&io_conf);
+        esp_err_t ret = gpio_config(&io_conf);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to configure GPIO %d: %s", config->pins[i], esp_err_to_name(ret));
+            return;
+        }
     }
 
     printf("\n**** PIN recovery time ****\n\n");
 
     for (int i = 0; i < pin_count; ++i) {
-        gpio_set_direction(config->pins[i], GPIO_MODE_INPUT_OUTPUT_OD);
-        gpio_set_level(config->pins[i], 0);
+        ESP_ERROR_CHECK(gpio_set_direction(config->pins[i], GPIO_MODE_INPUT_OUTPUT_OD));
+        ESP_ERROR_CHECK(gpio_set_level(config->pins[i], 0));
         usleep(100);
-        gpio_set_level(config->pins[i], 1);
+        ESP_ERROR_CHECK(gpio_set_level(config->pins[i], 1));
         uint32_t cycles = get_cycles_until_pin_level(config->pins[i], 1, 10000);
         printf("PIN %2d %3s  %"PRIu32" cycles\n", config->pins[i], config->names[i], cycles);
     }
@@ -130,14 +139,14 @@ void check_sd_card_pins(pin_configuration_t *config, const int pin_count)
     printf("\n**** PIN recovery time with weak pullup ****\n\n");
 
     for (int i = 0; i < pin_count; ++i) {
-        gpio_set_direction(config->pins[i], GPIO_MODE_INPUT_OUTPUT_OD);
-        gpio_pullup_en(config->pins[i]);
-        gpio_set_level(config->pins[i], 0);
+        ESP_ERROR_CHECK(gpio_set_direction(config->pins[i], GPIO_MODE_INPUT_OUTPUT_OD));
+        ESP_ERROR_CHECK(gpio_pullup_en(config->pins[i]));
+        ESP_ERROR_CHECK(gpio_set_level(config->pins[i], 0));
         usleep(100);
-        gpio_set_level(config->pins[i], 1);
+        ESP_ERROR_CHECK(gpio_set_level(config->pins[i], 1));
         uint32_t cycles = get_cycles_until_pin_level(config->pins[i], 1, 10000);
         printf("PIN %2d %3s  %"PRIu32" cycles\n", config->pins[i], config->names[i], cycles);
-        gpio_pullup_dis(config->pins[i]);
+        ESP_ERROR_CHECK(gpio_pullup_dis(config->pins[i]));
     }
 
 #if CONFIG_EXAMPLE_ENABLE_ADC_FEATURE
@@ -150,6 +159,13 @@ void check_sd_card_pins(pin_configuration_t *config, const int pin_count)
 
     adc_cali_handle_t *adc_cali_handle = (adc_cali_handle_t *)malloc(sizeof(adc_cali_handle_t)*pin_count);
     bool *do_calibration = (bool *)malloc(sizeof(bool)*pin_count);
+    if (!adc_cali_handle || !do_calibration) {
+        ESP_LOGE(TAG, "Failed to allocate ADC calibration buffers");
+        free(adc_cali_handle);
+        free(do_calibration);
+        ESP_ERROR_CHECK(adc_oneshot_del_unit(adc_handle));
+        return;
+    }
 
     for (int i = 0; i < pin_count; i++) {
         do_calibration[i] = adc_calibration_init(CONFIG_EXAMPLE_ADC_UNIT, i, ADC_ATTEN_DB, &adc_cali_handle[i]);
@@ -165,11 +181,11 @@ void check_sd_card_pins(pin_configuration_t *config, const int pin_count)
     printf("\n**** PIN voltage levels with weak pullup ****\n\n");
 
     for (int i = 0; i < pin_count; ++i) {
-        gpio_pullup_en(config->pins[i]);
+        ESP_ERROR_CHECK(gpio_pullup_en(config->pins[i]));
         usleep(100);
         float voltage = get_pin_voltage(config->adc_channels[i], adc_handle, do_calibration[i], adc_cali_handle[i]);
         printf("PIN %2d %3s  %.1fV\n", config->pins[i], config->names[i], voltage);
-        gpio_pullup_dis(config->pins[i]);
+        ESP_ERROR_CHECK(gpio_pullup_dis(config->pins[i]));
     }
 
     printf("\n**** PIN cross-talk ****\n\n");
@@ -180,8 +196,8 @@ void check_sd_card_pins(pin_configuration_t *config, const int pin_count)
     }
     printf("\n");
     for (int i = 0; i < pin_count; ++i) {
-        gpio_set_direction(config->pins[i], GPIO_MODE_INPUT_OUTPUT_OD);
-        gpio_set_level(config->pins[i], 0);
+        ESP_ERROR_CHECK(gpio_set_direction(config->pins[i], GPIO_MODE_INPUT_OUTPUT_OD));
+        ESP_ERROR_CHECK(gpio_set_level(config->pins[i], 0));
         printf("PIN %2d %3s    ", config->pins[i], config->names[i]);
         for (int j = 0; j < pin_count; ++j) {
             if (j == i) {
@@ -193,7 +209,7 @@ void check_sd_card_pins(pin_configuration_t *config, const int pin_count)
             printf("%1.1fV  ", voltage);
         }
         printf("\n");
-        gpio_set_direction(config->pins[i], GPIO_MODE_INPUT);
+        ESP_ERROR_CHECK(gpio_set_direction(config->pins[i], GPIO_MODE_INPUT));
     }
 
     printf("\n**** PIN cross-talk with weak pullup ****\n\n");
@@ -204,22 +220,22 @@ void check_sd_card_pins(pin_configuration_t *config, const int pin_count)
     }
     printf("\n");
     for (int i = 0; i < pin_count; ++i) {
-        gpio_set_direction(config->pins[i], GPIO_MODE_INPUT_OUTPUT_OD);
-        gpio_set_level(config->pins[i], 0);
+        ESP_ERROR_CHECK(gpio_set_direction(config->pins[i], GPIO_MODE_INPUT_OUTPUT_OD));
+        ESP_ERROR_CHECK(gpio_set_level(config->pins[i], 0));
         printf("PIN %2d %3s    ", config->pins[i], config->names[i]);
         for (int j = 0; j < pin_count; ++j) {
             if (j == i) {
                 printf(" --   ");
                 continue;
             }
-            gpio_pullup_en(config->pins[j]);
+            ESP_ERROR_CHECK(gpio_pullup_en(config->pins[j]));
             usleep(100);
             float voltage = get_pin_voltage(config->adc_channels[j], adc_handle, do_calibration[i], adc_cali_handle[i]);
             printf("%1.1fV  ", voltage);
-            gpio_pullup_dis(config->pins[j]);
+            ESP_ERROR_CHECK(gpio_pullup_dis(config->pins[j]));
         }
         printf("\n");
-        gpio_set_direction(config->pins[i], GPIO_MODE_INPUT);
+        ESP_ERROR_CHECK(gpio_set_direction(config->pins[i], GPIO_MODE_INPUT));
     }
 
     for (int i = 0; i < pin_count; ++i) {
@@ -227,5 +243,8 @@ void check_sd_card_pins(pin_configuration_t *config, const int pin_count)
             example_adc_calibration_deinit(adc_cali_handle[i]);
         }
     }
+    free(adc_cali_handle);
+    free(do_calibration);
+    ESP_ERROR_CHECK(adc_oneshot_del_unit(adc_handle));
 #endif //CONFIG_EXAMPLE_ENABLE_ADC_FEATURE
 }

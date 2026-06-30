@@ -1,3 +1,9 @@
+/*
+ * SPDX-FileCopyrightText: 2026-2027 Waveshare Team
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -6,12 +12,12 @@
 #include "button_gpio.h"
 #include "iot_button.h"
 
-static const char *TAG = "main";
+static const char *TAG = "button_main";
 
-#define GPOI0_IO_NUM 0
-#define GPOI4_IO_NUM 4
-#define GPOI5_IO_NUM 5
-#define GPOI6_IO_NUM 6
+#define GPIO0_IO_NUM 0
+#define GPIO4_IO_NUM 4
+#define GPIO5_IO_NUM 5
+#define GPIO6_IO_NUM 6
 #define BUTTON_ACTIVE_LEVEL 0
 
 static void button_event_cb(void *arg, void *data)
@@ -48,9 +54,15 @@ static esp_err_t register_button(int gpio_num, bool double_click)
         return ret;
     }
 
-    iot_button_register_cb(btn, BUTTON_SINGLE_CLICK, NULL, button_event_cb, (void *)(intptr_t)gpio_num);
+    ret = iot_button_register_cb(btn, BUTTON_SINGLE_CLICK, NULL, button_event_cb, (void *)(intptr_t)gpio_num);
+    if (ret != ESP_OK) {
+        return ret;
+    }
     if (double_click) {
-        iot_button_register_cb(btn, BUTTON_DOUBLE_CLICK, NULL, button_event_cb, (void *)(intptr_t)gpio_num);
+        ret = iot_button_register_cb(btn, BUTTON_DOUBLE_CLICK, NULL, button_event_cb, (void *)(intptr_t)gpio_num);
+        if (ret != ESP_OK) {
+            return ret;
+        }
     }
 
     return ESP_OK;
@@ -62,14 +74,16 @@ void app_main(void)
         int gpio_num;
         bool double_click;
     } buttons[] = {
-        {GPOI0_IO_NUM, false},
-        {GPOI5_IO_NUM, false},
-        {GPOI6_IO_NUM, true},
-        {GPOI4_IO_NUM, false},
+        {GPIO0_IO_NUM, false},
+        {GPIO5_IO_NUM, false},
+        {GPIO6_IO_NUM, true},
+        {GPIO4_IO_NUM, false},
     };
 
     for (size_t i = 0; i < sizeof(buttons) / sizeof(buttons[0]); ++i) {
-        if (register_button(buttons[i].gpio_num, buttons[i].double_click) != ESP_OK) {
+        esp_err_t ret = register_button(buttons[i].gpio_num, buttons[i].double_click);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to register GPIO %d button: %s", buttons[i].gpio_num, esp_err_to_name(ret));
             return;
         }
     }

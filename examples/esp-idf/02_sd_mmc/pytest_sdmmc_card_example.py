@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026-2027 Waveshare Team
+#
 # SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
 # SPDX-License-Identifier: Unlicense OR CC0-1.0
 import logging
