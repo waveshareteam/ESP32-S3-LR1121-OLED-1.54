@@ -10,7 +10,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "bsp/esp-bsp.h"
+#include "board_support.h"
 
 #ifdef __cplusplus
 extern "C" {

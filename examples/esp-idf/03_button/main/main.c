@@ -9,16 +9,12 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "esp_log.h"
+#include "board_support.h"
 #include "button_gpio.h"
 #include "iot_button.h"
 
 static const char *TAG = "button_main";
 
-#define GPIO0_IO_NUM 0
-#define GPIO4_IO_NUM 4
-#define GPIO5_IO_NUM 5
-#define GPIO6_IO_NUM 6
-#define BUTTON_ACTIVE_LEVEL 0
 
 static void button_event_cb(void *arg, void *data)
 {
@@ -42,18 +38,9 @@ static void button_event_cb(void *arg, void *data)
 
 static esp_err_t register_button(int gpio_num, bool double_click)
 {
-    const button_config_t btn_cfg = {0};
-    button_gpio_config_t btn_gpio_cfg = {
-        .gpio_num = gpio_num,
-        .active_level = BUTTON_ACTIVE_LEVEL,
-    };
-    button_handle_t btn = NULL;
-
-    esp_err_t ret = iot_button_new_gpio_device(&btn_cfg, &btn_gpio_cfg, &btn);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-
+    button_handle_t btn = board_button_for_gpio((gpio_num_t)gpio_num);
+    if (!btn) return ESP_FAIL;
+    esp_err_t ret;
     ret = iot_button_register_cb(btn, BUTTON_SINGLE_CLICK, NULL, button_event_cb, (void *)(intptr_t)gpio_num);
     if (ret != ESP_OK) {
         return ret;
@@ -74,10 +61,10 @@ void app_main(void)
         int gpio_num;
         bool double_click;
     } buttons[] = {
-        {GPIO0_IO_NUM, false},
-        {GPIO5_IO_NUM, false},
-        {GPIO6_IO_NUM, true},
-        {GPIO4_IO_NUM, false},
+        {BOOT_KEY_GPIO, false},
+        {MENU_KEY_GPIO, false},
+        {PTT_KEY_GPIO, true},
+        {PWR_KEY_GPIO, false},
     };
 
     for (size_t i = 0; i < sizeof(buttons) / sizeof(buttons[0]); ++i) {

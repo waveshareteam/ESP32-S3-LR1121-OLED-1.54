@@ -1,8 +1,10 @@
 # Button Example
 
+Before the first build, complete the [Board Manager setup](../../../docs/board-manager.md) and select `esp32_s3_lr1121_oled_1_54_xf` with `idf.py bmgr -b esp32_s3_lr1121_oled_1_54_xf`.
+
 This example shows how to use the board buttons with the ESP-IDF button component.
 
-The application creates GPIO button devices, registers click callbacks, and prints button events to the serial console. It is useful for verifying the button GPIO mapping and checking that the button driver is working correctly on the board.
+The application obtains named button devices from the shared Board Manager component, registers click callbacks, and prints button events to the serial console. It is useful for verifying the button GPIO mapping and checking that the button driver is working correctly on the board.
 
 ## How to use example
 
@@ -54,5 +56,5 @@ For repeat, long-press, or multiple-click events, the callback also prints extra
 ## Troubleshooting
 
 * If no events are printed, check that the board is powered correctly and the serial monitor is connected to the right port.
-* If a button always appears pressed or never triggers, verify the GPIO active level in `main/main.c`.
-* If the build cannot find the button component, run `idf.py reconfigure` or remove `managed_components` and build again.
+* If a button always appears pressed or never triggers, verify the active level in the product board YAML. GPIO4 is high-active through Q6; GPIO0/5/6 are low-active.
+* If the build cannot find the button component, check `components/esp32_s3_lr1121_oled_1_54_support/idf_component.yml` and run `idf.py reconfigure`.

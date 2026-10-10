@@ -8,7 +8,7 @@
 #define __UI_H__
 
 #include "app_state.h"
-#include "bsp/esp-bsp.h"
+#include "board_support.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "lvgl.h"

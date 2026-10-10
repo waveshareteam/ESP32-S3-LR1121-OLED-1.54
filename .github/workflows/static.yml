@@ -1,0 +1,27 @@
+name: Repository static checks
+on:
+  push:
+    paths: ['examples/**', 'firmware/12_factory_demo/**', 'config/**', 'scripts/**', 'tests/**', 'releases/**', 'docs/**', '*.md', '.github/**']
+  pull_request:
+    paths: ['examples/**', 'firmware/12_factory_demo/**', 'config/**', 'scripts/**', 'tests/**', 'releases/**', 'docs/**', '*.md', '.github/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install PyYAML==6.0.2
+      - run: python -m unittest discover -s tests -v
+      - run: python scripts/validate_repo.py
+      - run: python scripts/scan_public_content.py
+      - run: python scripts/inventory_repo.py > inventory.json
+      - run: git diff --check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source-inventory
+          path: inventory.json

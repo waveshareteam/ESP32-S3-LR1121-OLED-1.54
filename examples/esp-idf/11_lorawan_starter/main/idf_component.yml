@@ -1,0 +1,6 @@
+dependencies:
+  idf: '>=5.5.5,<6.3'
+  RadioLib:
+    path: ../../../../libraries/RadioLib
+  waveshare/waveshare_boards:
+    version: "*"

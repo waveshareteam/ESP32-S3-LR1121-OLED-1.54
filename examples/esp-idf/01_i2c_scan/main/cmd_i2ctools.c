@@ -33,86 +33,30 @@ void set_i2ctools_bus_handle(i2c_master_bus_handle_t bus_handle)
     tool_bus_handle = bus_handle;
 }
 
-static esp_err_t i2c_get_port(int port, i2c_port_t *i2c_port)
-{
-    if (port >= I2C_NUM_MAX) {
-        ESP_LOGE(TAG, "Wrong port number: %d", port);
-        return ESP_FAIL;
-    }
-    *i2c_port = port;
-    return ESP_OK;
-}
-
-static struct {
-    struct arg_int *port;
-    struct arg_int *freq;
-    struct arg_int *sda;
-    struct arg_int *scl;
-    struct arg_end *end;
-} i2cconfig_args;
-
+static struct { struct arg_int *freq; struct arg_end *end; } i2cconfig_args;
 static int do_i2cconfig_cmd(int argc, char **argv)
 {
-    int nerrors = arg_parse(argc, argv, (void **)&i2cconfig_args);
-    i2c_port_t i2c_port = I2C_NUM_0;
-    int i2c_gpio_sda = 0;
-    int i2c_gpio_scl = 0;
-    if (nerrors != 0) {
+    if (arg_parse(argc, argv, (void **)&i2cconfig_args)) {
         arg_print_errors(stderr, i2cconfig_args.end, argv[0]);
-        return 0;
+        return 1;
     }
-
-    /* Check "--port" option */
-    if (i2cconfig_args.port->count) {
-        if (i2c_get_port(i2cconfig_args.port->ival[0], &i2c_port) != ESP_OK) {
-            return 1;
-        }
-    }
-    /* Check "--freq" option */
     if (i2cconfig_args.freq->count) {
-        i2c_frequency = i2cconfig_args.freq->ival[0];
+        int freq = i2cconfig_args.freq->ival[0];
+        if (freq < 10000 || freq > 400000) return 1;
+        i2c_frequency = freq;
     }
-    /* Check "--sda" option */
-    i2c_gpio_sda = i2cconfig_args.sda->ival[0];
-    /* Check "--scl" option */
-    i2c_gpio_scl = i2cconfig_args.scl->ival[0];
-
-    // re-init the bus
-    if (i2c_del_master_bus(tool_bus_handle) != ESP_OK) {
-        return 1;
-    }
-
-    i2c_master_bus_config_t i2c_bus_config = {
-        .clk_source = I2C_CLK_SRC_DEFAULT,
-        .i2c_port = i2c_port,
-        .scl_io_num = i2c_gpio_scl,
-        .sda_io_num = i2c_gpio_sda,
-        .glitch_ignore_cnt = 7,
-        .flags.enable_internal_pullup = true,
-    };
-
-    if (i2c_new_master_bus(&i2c_bus_config, &tool_bus_handle) != ESP_OK) {
-        return 1;
-    }
-
+    ESP_LOGI(TAG, "Board Manager i2c_main; transfer clock %lu Hz", (unsigned long)i2c_frequency);
     return 0;
 }
-
 static void register_i2cconfig(void)
 {
-    i2cconfig_args.port = arg_int0(NULL, "port", "<0|1>", "Set the I2C bus port number");
-    i2cconfig_args.freq = arg_int0(NULL, "freq", "<Hz>", "Set the frequency(Hz) of I2C bus");
-    i2cconfig_args.sda = arg_int1(NULL, "sda", "<gpio>", "Set the gpio for I2C SDA");
-    i2cconfig_args.scl = arg_int1(NULL, "scl", "<gpio>", "Set the gpio for I2C SCL");
-    i2cconfig_args.end = arg_end(2);
-    const esp_console_cmd_t i2cconfig_cmd = {
-        .command = "i2cconfig",
-        .help = "Config I2C bus",
-        .hint = NULL,
-        .func = &do_i2cconfig_cmd,
-        .argtable = &i2cconfig_args
+    i2cconfig_args.freq = arg_int0(NULL, "freq", "<Hz>", "Transfer clock (10000..400000)");
+    i2cconfig_args.end = arg_end(1);
+    const esp_console_cmd_t cmd = {
+        .command = "i2cconfig", .help = "Inspect board I2C / set transfer clock",
+        .func = do_i2cconfig_cmd, .argtable = &i2cconfig_args,
     };
-    ESP_ERROR_CHECK(esp_console_cmd_register(&i2cconfig_cmd));
+    ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
 }
 
 static int do_i2cdetect_cmd(int argc, char **argv)

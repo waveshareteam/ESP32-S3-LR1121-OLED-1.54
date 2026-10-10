@@ -26,13 +26,13 @@
 
 #include "AudioPipeline.h"
 #include "AppState.h"
+#include "BatteryGauge.h"
 #include "Config.h"
 #include "RadioRuntime.h"
 #include "Sensors.h"
 #include "Settings.h"
 #include "Ui.h"
 
-static constexpr uint32_t LOW_POWER_IDLE_TIMEOUT_MS = 30000;
 static const gpio_num_t WAKE_BUTTON_GPIOS[] = {
     (gpio_num_t)PIN_KEY_PTT,
     (gpio_num_t)PIN_KEY_MENU,
@@ -43,14 +43,15 @@ static const gpio_num_t LORA_WAKE_GPIO = (gpio_num_t)PIN_LR_INT;
 static uint32_t lowPowerLastActivityMs = 0;
 static uint32_t lowPowerLastButtonMask = 0;
 
-static void logSleepError(const char *step, esp_err_t err) {
+static bool logSleepError(const char *step, esp_err_t err) {
   if (err != ESP_OK) {
-    Serial.printf("[Sleep] %s failed: %s\n", step, esp_err_to_name(err));
+    WALKIE_LOG_PRINTF("[Sleep] %s failed: %s\n", step, esp_err_to_name(err));
   }
+  return err == ESP_OK;
 }
 
 static bool isWakeButtonPressed(gpio_num_t gpio) {
-  return gpio_get_level(gpio) == 0;
+  return gpio_get_level(gpio) == (gpio == PIN_KEY_PWR ? POWER_BUTTON_ACTIVE_LEVEL : LOW);
 }
 
 static uint32_t readWakeButtonMask() {
@@ -70,21 +71,23 @@ static void waitForWakeButtonsRelease() {
   delay(50);
 }
 
-static void enableLightSleepWakeupSources() {
+static bool enableLightSleepWakeupSources() {
+  bool ok = true;
   for (gpio_num_t gpio : WAKE_BUTTON_GPIOS) {
-    logSleepError("button wake disable", gpio_wakeup_disable(gpio));
-    logSleepError("button direction", gpio_set_direction(gpio, GPIO_MODE_INPUT));
-    logSleepError("button pullup", gpio_pullup_en(gpio));
-    logSleepError("button pulldown", gpio_pulldown_dis(gpio));
-    logSleepError("button wake enable", gpio_wakeup_enable(gpio, GPIO_INTR_LOW_LEVEL));
+    // Preserve the input/pull configuration established by the button code.
+    uint8_t activeLevel = gpio == PIN_KEY_PWR ? POWER_BUTTON_ACTIVE_LEVEL : LOW;
+    ok &= logSleepError("button wake disable", gpio_wakeup_disable(gpio));
+    ok &= logSleepError("button wake enable", gpio_wakeup_enable(gpio,
+        activeLevel == HIGH ? GPIO_INTR_HIGH_LEVEL : GPIO_INTR_LOW_LEVEL));
   }
 
   detachRadioIrqForSleep();
-  (void)gpio_intr_disable(LORA_WAKE_GPIO);
-  (void)gpio_set_intr_type(LORA_WAKE_GPIO, GPIO_INTR_DISABLE);
-  logSleepError("LoRa wake disable", gpio_wakeup_disable(LORA_WAKE_GPIO));
-  logSleepError("LoRa wake enable", gpio_wakeup_enable(LORA_WAKE_GPIO, GPIO_INTR_HIGH_LEVEL));
-  logSleepError("GPIO wake source", esp_sleep_enable_gpio_wakeup());
+  ok &= logSleepError("LoRa IRQ disable", gpio_intr_disable(LORA_WAKE_GPIO));
+  ok &= logSleepError("LoRa IRQ type", gpio_set_intr_type(LORA_WAKE_GPIO, GPIO_INTR_DISABLE));
+  ok &= logSleepError("LoRa wake disable", gpio_wakeup_disable(LORA_WAKE_GPIO));
+  ok &= logSleepError("LoRa wake enable", gpio_wakeup_enable(LORA_WAKE_GPIO, GPIO_INTR_HIGH_LEVEL));
+  ok &= logSleepError("GPIO wake source", esp_sleep_enable_gpio_wakeup());
+  return ok;
 }
 
 static void disableLightSleepWakeupSources() {
@@ -100,26 +103,41 @@ static void disableLightSleepWakeupSources() {
 }
 
 static void enterLightSleep() {
-  Serial.printf("[Sleep] idle for %ums, entering light sleep\n", (unsigned)LOW_POWER_IDLE_TIMEOUT_MS);
-
-  resetRadioRuntimeAfterSleep(false, false);
-  clearAudioBuffers();
-  int16_t radioState = startRadioReceiveForSleep();
-  if (radioState != RADIOLIB_ERR_NONE) {
-    Serial.printf("[Sleep] receive before sleep failed: %d\n", radioState);
+  // The configuration worker and any packet in progress must finish first.
+  if (batteryGaugeInitInProgress() || radioRuntimeIsBusy() || transmissionMode || readWakeButtonMask() != 0) {
+    return;
+  }
+  if (isRadioIrqAsserted()) {
+    setRadioIrqPending();
+    return;
   }
 
+  int16_t radioState = startRadioReceiveForSleep();
+  if (radioState != RADIOLIB_ERR_NONE) {
+    WALKIE_LOG_PRINTF("[Sleep] receive before sleep failed: %d\n", radioState);
+    return;
+  }
+
+  WALKIE_LOG_PRINTF("[Sleep] idle for %ums, entering light sleep\n", (unsigned)LOW_POWER_IDLE_TIMEOUT_MS);
+  resetRadioRuntimeAfterSleep(false, false);
+  clearAudioBuffers();
   prepareAudioSleep();
   sleepDisplay();
   delay(50);
 
-  enableLightSleepWakeupSources();
-  esp_err_t sleepRet = esp_light_sleep_start();
+  bool wakeSourcesReady = enableLightSleepWakeupSources();
+  esp_err_t sleepRet = ESP_ERR_INVALID_STATE;
+  if (wakeSourcesReady) {
+#if ENABLE_DEBUG_LOG
+    Serial.flush();
+#endif
+    sleepRet = esp_light_sleep_start();
+  }
   bool loraIrqPending = isRadioIrqAsserted();
   disableLightSleepWakeupSources();
 
-  if (sleepRet != ESP_OK) {
-    Serial.printf("[Sleep] light sleep failed: %s\n", esp_err_to_name(sleepRet));
+  if (wakeSourcesReady && sleepRet != ESP_OK) {
+    WALKIE_LOG_PRINTF("[Sleep] light sleep failed: %s\n", esp_err_to_name(sleepRet));
   }
 
   wakeDisplay();
@@ -128,6 +146,8 @@ static void enterLightSleep() {
 
   resumeAudioFromSleep();
   clearAudioBuffers();
+  // A packet may arrive while the wake key is held or the codecs are resuming.
+  loraIrqPending = loraIrqPending || isRadioIrqAsserted();
   resetRadioRuntimeAfterSleep(false, loraIrqPending);
   if (!loraIrqPending) {
     radioState = startRadioReceiveForSleep();
@@ -138,8 +158,11 @@ static void enterLightSleep() {
 
   resetUiTimers();
   resetSensorTimers();
+  readRtc();
+  readBattery();
   markUiDirty();
-  Serial.printf("[Sleep] woke from light sleep%s\n", loraIrqPending ? " by LoRa IRQ" : "");
+  WALKIE_LOG_PRINTF("[Sleep] %s%s\n", sleepRet == ESP_OK ? "woke from light sleep" : "sleep cancelled",
+                loraIrqPending ? ", LoRa IRQ pending" : "");
 }
 
 static void resetLowPowerIdle() {
@@ -158,7 +181,8 @@ static void handleLowPowerIdle() {
     return;
   }
 
-  if (buttonMask != lowPowerLastButtonMask || buttonMask != 0 || radioRuntimeIsBusy() || transmissionMode) {
+  if (buttonMask != lowPowerLastButtonMask || buttonMask != 0 ||
+      batteryGaugeInitInProgress() || radioRuntimeIsBusy() || transmissionMode) {
     lowPowerLastActivityMs = now;
     lowPowerLastButtonMask = buttonMask;
     return;
@@ -173,48 +197,71 @@ static void handleLowPowerIdle() {
 }
 
 void setup() {
+  uint32_t startedMs = millis();
+#if ENABLE_DEBUG_LOG
   Serial.begin(115200);
+#if ARDUINO_USB_CDC_ON_BOOT
+  // A closed/slow serial monitor must not stall PTT, audio or screen refresh.
+  // Diagnostic output may be dropped when the USB transmit buffer is full.
+  Serial.setTxTimeoutMs(0);
+#endif
+#endif
   delay(100);
-  Serial.println();
-  Serial.println("ESP32-S3 LR1121 OLED walkie-talkie Arduino example");
+  WALKIE_LOG_PRINTLN();
+  WALKIE_LOG_PRINTLN("ESP32-S3 LR1121 OLED walkie-talkie Arduino example");
 
-  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 400000);
-  Wire.setClock(400000);
+  if (!Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 400000)) {
+    fatalError("I2C init", -1);
+  }
 
-  initDisplay();
+  if (!initDisplay()) {
+    fatalError("OLED init", -1);
+  }
   initUiButtons();
   pinMode(PIN_KEY_PTT, INPUT_PULLUP);
 
   loadRadioSettings();
+  startBatteryGaugeInit();
   readRtc();
-  readBattery();
 
   if (!initAudioHardware()) {
     fatalError("Audio init", -1);
   }
-  startAudioTasks();
+  if (!startAudioTasks()) {
+    fatalError("Audio task", audioStartupError());
+  }
 
   initRadioSpi();
   int16_t state = applyRadioConfig(true);
   if (state != RADIOLIB_ERR_NONE) {
     fatalError("Radio init", state);
   }
+  if (!startRadioConfigTask()) {
+    fatalError("Radio task", -1);
+  }
 
-  Serial.printf("[LR1121] modem=%s freq=%.1f\n", radioModem == RADIO_MODEM_GFSK ? "GFSK" : "LoRa", radioFrequencyMhz);
+  WALKIE_LOG_PRINTF("[LR1121] modem=%s freq=%.1f\n", radioModem == RADIO_MODEM_GFSK ? "GFSK" : "LoRa", radioFrequencyMhz);
   resetUiTimers();
   resetSensorTimers();
   renderUi();
   resetLowPowerIdle();
+  WALKIE_LOG_PRINTF("[Boot] ready=%ums, battery check continues in loop\n", (unsigned)(millis() - startedMs));
 }
 
 void loop() {
+  if (audioStartupError() != 0) {
+    fatalError("Audio startup", audioStartupError());
+  }
   handleUiButtons();
   handlePtt();
   handleRadioReconfigure();
   handleRadioTransmission();
   handleLowPowerIdle();
   handleRadioIrq();
+  serviceBatteryGaugeInit();
   periodicSensors();
   periodicUi();
+  logRadioDiagnostics();
+  logAudioDiagnostics();
   delay(10);
 }

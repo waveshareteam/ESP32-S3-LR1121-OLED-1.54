@@ -613,7 +613,7 @@ void ui_create_pages(void)
     lv_obj_align(page1, LV_ALIGN_TOP_LEFT, 0, 0);
 
     /* Create input device */
-    lv_indev_t * indev = bsp_display_get_input_dev();
+    lv_indev_t * indev = board_display_get_input_dev();
 
     /* Create group */
     g = lv_group_create();
@@ -671,17 +671,8 @@ void ui_create_pages(void)
     lv_label_set_long_mode(label_params, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
     lv_label_set_text(label_params, "BR50 DEV25 RX117 P22");
     
-    const button_config_t btn_cfg = {0};
-    button_gpio_config_t btn_gpio_cfg = {
-        .gpio_num = PTT_KEY_GPIO,
-        .active_level = BUTTON_ACTIVE_LEVEL,
-    };
-    button_handle_t btn = NULL;
-
-    esp_err_t ret = iot_button_new_gpio_device(&btn_cfg, &btn_gpio_cfg, &btn);
-    if (ret != ESP_OK) {
-        printf("Failed to create button device: %s\n", esp_err_to_name(ret));
-    }
+    button_handle_t btn = board_button("button_ptt");
+    ESP_ERROR_CHECK(btn ? ESP_OK : ESP_FAIL);
 
     iot_button_register_cb(btn, BUTTON_PRESS_DOWN, NULL, Button_event_cb, NULL);
     iot_button_register_cb(btn, BUTTON_PRESS_UP, NULL, Button_event_cb, NULL);

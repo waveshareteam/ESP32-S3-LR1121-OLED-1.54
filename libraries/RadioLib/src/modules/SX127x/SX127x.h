@@ -588,6 +588,7 @@ class SX127x: public PhysicalLayer {
     using PhysicalLayer::startTransmit;
     using PhysicalLayer::startReceive;
     using PhysicalLayer::readData;
+    using PhysicalLayer::getRSSI;
 
     // constructor
 

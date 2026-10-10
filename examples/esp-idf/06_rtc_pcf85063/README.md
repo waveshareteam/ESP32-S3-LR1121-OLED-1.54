@@ -1,5 +1,7 @@
 # PCF85063 RTC Example
 
+Before the first build, complete the [Board Manager setup](../../../docs/board-manager.md) and select `esp32_s3_lr1121_oled_1_54_xf` with `idf.py bmgr -b esp32_s3_lr1121_oled_1_54_xf`.
+
 This example shows how to use the onboard PCF85063 RTC.
 
 The application initializes the RTC, sets a default date and time, configures an alarm, and prints the current time once per second. It also registers the RTC alarm GPIO as a button input so the alarm flag can be observed from the serial console.

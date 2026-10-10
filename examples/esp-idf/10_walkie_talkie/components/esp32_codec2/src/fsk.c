@@ -473,7 +473,8 @@ void fsk_demod_freq_est(struct FSK *fsk, COMP fsk_in[], float *freqs, int M) {
   int freqi[M];
   int st, en, f_zero;
 
-  kiss_fft_cpx *fftin = (kiss_fft_cpx *)malloc(sizeof(kiss_fft_cpx) * Ndft);
+  /* Keep FFT input initialized independently of the window-fill loop. */
+  kiss_fft_cpx *fftin = (kiss_fft_cpx *)calloc(Ndft, sizeof(kiss_fft_cpx));
   kiss_fft_cpx *fftout = (kiss_fft_cpx *)malloc(sizeof(kiss_fft_cpx) * Ndft);
 
   st = (fsk->est_min * Ndft) / Fs + Ndft / 2;

@@ -1,8 +1,9 @@
 set(srcs "sd_card_example_main.c")
 
-idf_component_register(SRCS ${srcs}
+idf_component_register(
+SRCS ${srcs}
                        INCLUDE_DIRS "."
-                       REQUIRES fatfs sd_card
+                       REQUIRES esp32_s3_lr1121_oled_1_54_support fatfs
                        WHOLE_ARCHIVE)
 
 if(NOT CONFIG_SOC_SDMMC_HOST_SUPPORTED)

@@ -31,16 +31,14 @@ static DynamicBuffer<int16_t> playbackBuffer(AUDIO_BUFFER_SIZE);
 static DynamicBuffer<uint8_t> loraSendBuffer(LORA_TRANSMISSION_DATA_SIZE * 10);
 static DynamicBuffer<uint8_t> loraReceiveBuffer(LORA_TRANSMISSION_DATA_SIZE * 10);
 static volatile uint32_t txEncodedFrames = 0;
-static volatile uint32_t txGatedFrames = 0;
+static volatile uint32_t txMutedFrames = 0;
 static volatile uint32_t micReadFailures = 0;
-static volatile uint32_t txSilenceFallbackFrames = 0;
 static volatile uint32_t micInputLevel = 0;
 static volatile uint32_t micInputPeak = 0;
 static volatile uint32_t micInputClipCount = 0;
 static volatile uint32_t txProcessedLevel = 0;
 static volatile uint32_t txProcessedPeak = 0;
 static volatile uint32_t txProcessedClipCount = 0;
-static volatile uint32_t txNoiseFloor = TX_NOISE_FLOOR_INITIAL;
 static volatile bool txVoiceGateOpen = false;
 static volatile bool speakerPowerAmpEnabled = false;
 static volatile int lastMicReadErr = ESP_OK;
@@ -55,6 +53,11 @@ static volatile uint32_t rxPlaybackPeak = 0;
 static volatile uint32_t rxPlaybackClipCount = 0;
 static uint8_t selectedMicSlot = 0;
 static volatile bool audioSuspended = false;
+static volatile bool codecTaskReady = false;
+static volatile bool speakerTaskReady = false;
+static volatile int startupError = 0;
+static volatile uint32_t speakerFramesWritten = 0;
+static volatile uint32_t speakerWriteFailures = 0;
 static uint32_t lastAudioTxLog = 0;
 static uint32_t lastAudioRxLog = 0;
 static uint32_t lastMicFailureLog = 0;
@@ -89,37 +92,18 @@ static PcmStats measurePcm(const int16_t *samples, size_t sampleCount) {
   return stats;
 }
 
-static int16_t softLimitSample(int32_t sample, int32_t knee, int32_t peak) {
-  int32_t sign = sample < 0 ? -1 : 1;
-  int32_t absSample = sample < 0 ? -sample : sample;
-  if (absSample > knee) {
-    absSample = knee + (absSample - knee) / 4;
-  }
-  if (absSample > peak) {
-    absSample = peak;
-  }
-  return (int16_t)(sign * absSample);
-}
-
 struct TxAudioProcessor {
   int16_t prevInput = 0;
   int32_t prevHighpass = 0;
   int32_t gainQ8 = 256;
-  int32_t noiseFloorQ8 = TX_NOISE_FLOOR_INITIAL * 256;
-  uint8_t hangoverFrames = 0;
-  bool voiceActive = false;
 
   void reset() {
     prevInput = 0;
     prevHighpass = 0;
     gainQ8 = 256;
-    noiseFloorQ8 = TX_NOISE_FLOOR_INITIAL * 256;
-    hangoverFrames = 0;
-    voiceActive = false;
     txProcessedLevel = 0;
     txProcessedPeak = 0;
     txProcessedClipCount = 0;
-    txNoiseFloor = TX_NOISE_FLOOR_INITIAL;
     txVoiceGateOpen = false;
   }
 
@@ -137,68 +121,23 @@ struct TxAudioProcessor {
     return levelSum / sampleCount;
   }
 
-  void primeNoiseFloor(int16_t *samples, size_t sampleCount) {
-    if (!samples || sampleCount == 0) {
-      return;
-    }
-
-    uint32_t level = highpassAndMeasure(samples, sampleCount);
-    noiseFloorQ8 = (noiseFloorQ8 * 7 + (int32_t)level * 256) / 8;
-    txProcessedLevel = level;
-    txProcessedPeak = 0;
-    txProcessedClipCount = 0;
-    txNoiseFloor = noiseFloorQ8 >> 8;
-    txVoiceGateOpen = false;
-  }
-
   bool process(int16_t *samples, size_t sampleCount) {
     if (!samples || sampleCount == 0) {
       return false;
     }
 
     uint32_t level = highpassAndMeasure(samples, sampleCount);
-    int32_t noiseFloor = noiseFloorQ8 >> 8;
-    int32_t openThreshold = max((int32_t)TX_SILENCE_LEVEL, noiseFloor + TX_NOISE_OPEN_MARGIN);
-    int32_t closeThreshold = max((int32_t)TX_SILENCE_LEVEL, noiseFloor + TX_NOISE_CLOSE_MARGIN);
-
-    if (!voiceActive && level < (uint32_t)openThreshold) {
-      noiseFloorQ8 = (noiseFloorQ8 * 31 + (int32_t)level * 256) / 32;
-      noiseFloor = noiseFloorQ8 >> 8;
-      openThreshold = max((int32_t)TX_SILENCE_LEVEL, noiseFloor + TX_NOISE_OPEN_MARGIN);
-      closeThreshold = max((int32_t)TX_SILENCE_LEVEL, noiseFloor + TX_NOISE_CLOSE_MARGIN);
-    }
-
-    if (voiceActive) {
-      if (level >= (uint32_t)closeThreshold) {
-        hangoverFrames = TX_VOICE_HANGOVER_FRAMES;
-      } else if (hangoverFrames > 0) {
-        hangoverFrames--;
-      } else {
-        voiceActive = false;
-      }
-    } else if (level >= (uint32_t)openThreshold) {
-      voiceActive = true;
-      hangoverFrames = TX_VOICE_HANGOVER_FRAMES;
-    }
-
-    txProcessedLevel = level;
-    txNoiseFloor = noiseFloor;
-    txVoiceGateOpen = voiceActive;
-
-    if (!voiceActive) {
+    txVoiceGateOpen = level >= (uint32_t)TX_SILENCE_LEVEL;
+    if (!txVoiceGateOpen) {
       memset(samples, 0, sampleCount * sizeof(int16_t));
       gainQ8 = 256;
       txProcessedLevel = 0;
       txProcessedPeak = 0;
       txProcessedClipCount = 0;
-      return false;
-    }
-    if (level == 0) {
-      memset(samples, 0, sampleCount * sizeof(int16_t));
-      txProcessedLevel = 0;
-      txProcessedPeak = 0;
-      txProcessedClipCount = 0;
-      return false;
+      txMutedFrames++;
+      // Match IDF: encode silence too. Dropping these frames can prevent a
+      // quiet talk burst from ever filling the 240-byte radio packet.
+      return true;
     }
 
     int32_t targetGainQ8 = (TX_AGC_TARGET_LEVEL * 256) / (int32_t)level;
@@ -211,7 +150,7 @@ struct TxAudioProcessor {
 
     for (size_t i = 0; i < sampleCount; i++) {
       int32_t sample = ((int32_t)samples[i] * gainQ8) >> 8;
-      samples[i] = softLimitSample(sample, TX_SOFT_KNEE, TX_PEAK_LIMIT);
+      samples[i] = (int16_t)constrain(sample, -TX_PEAK_LIMIT, TX_PEAK_LIMIT);
     }
     PcmStats stats = measurePcm(samples, sampleCount);
     txProcessedLevel = stats.avgAbs;
@@ -222,8 +161,6 @@ struct TxAudioProcessor {
 };
 
 struct PlaybackAudioProcessor {
-  uint8_t hangoverFrames = 0;
-
   void process(int16_t *samples, size_t sampleCount) {
     if (!samples || sampleCount == 0) {
       return;
@@ -234,22 +171,11 @@ struct PlaybackAudioProcessor {
     rxDecodedPeak = decodedStats.peak;
     rxDecodedClipCount = decodedStats.clipCount;
 
-    bool hasSignal = decodedStats.avgAbs >= PLAYBACK_NOISE_GATE_LEVEL ||
-                     decodedStats.peak >= PLAYBACK_NOISE_GATE_LEVEL * 4;
-    if (hasSignal) {
-      hangoverFrames = PLAYBACK_NOISE_GATE_HANGOVER_FRAMES;
-    } else if (hangoverFrames > 0) {
-      hangoverFrames--;
-      hasSignal = true;
-    }
-
-    if (!hasSignal) {
-      memset(samples, 0, sampleCount * sizeof(int16_t));
-    } else {
-      for (size_t i = 0; i < sampleCount; i++) {
-        int32_t sample = (int32_t)samples[i] * PLAYBACK_GAIN_NUM / PLAYBACK_GAIN_DEN;
-        samples[i] = softLimitSample(sample, PLAYBACK_SOFT_KNEE, PLAYBACK_PEAK_LIMIT);
-      }
+    // IDF scales and limits decoded PCM without a second noise gate. Preserve
+    // quiet received speech instead of turning successfully received packets silent.
+    for (size_t i = 0; i < sampleCount; i++) {
+      int32_t sample = (int32_t)samples[i] * PLAYBACK_GAIN_NUM / PLAYBACK_GAIN_DEN;
+      samples[i] = (int16_t)constrain(sample, -PLAYBACK_PEAK_LIMIT, PLAYBACK_PEAK_LIMIT);
     }
 
     PcmStats playbackStats = measurePcm(samples, sampleCount);
@@ -260,13 +186,16 @@ struct PlaybackAudioProcessor {
 };
 
 static void logI2sInfo(const char *name, i2s_chan_handle_t channel) {
+  if (!ENABLE_DEBUG_LOG) {
+    return;
+  }
   i2s_chan_info_t info = {};
   esp_err_t err = i2s_channel_get_info(channel, &info);
   if (err != ESP_OK) {
-    Serial.printf("[I2S] %s info failed: %d\n", name, err);
+    WALKIE_LOG_PRINTF("[I2S] %s info failed: %d\n", name, err);
     return;
   }
-  Serial.printf("[I2S] %s mode=%d enabled=%d mclk=%u bclk=%u dma=%u\n",
+  WALKIE_LOG_PRINTF("[I2S] %s mode=%d enabled=%d mclk=%u bclk=%u dma=%u\n",
                 name,
                 (int)info.mode,
                 info.is_enabled ? 1 : 0,
@@ -280,7 +209,7 @@ static bool initI2s() {
   chanCfg.auto_clear = true;
   esp_err_t err = i2s_new_channel(&chanCfg, &i2sTx, &i2sRx);
   if (err != ESP_OK) {
-    Serial.printf("[I2S] new channel failed: %d\n", err);
+    WALKIE_LOG_PRINTF("[I2S] new channel failed: %d\n", err);
     return false;
   }
 
@@ -298,12 +227,12 @@ static bool initI2s() {
 
   err = i2s_channel_init_std_mode(i2sTx, &stdCfg);
   if (err != ESP_OK) {
-    Serial.printf("[I2S] TX init failed: %d\n", err);
+    WALKIE_LOG_PRINTF("[I2S] TX init failed: %d\n", err);
     return false;
   }
   err = i2s_channel_enable(i2sTx);
   if (err != ESP_OK) {
-    Serial.printf("[I2S] TX enable failed: %d\n", err);
+    WALKIE_LOG_PRINTF("[I2S] TX enable failed: %d\n", err);
     return false;
   }
 
@@ -336,12 +265,12 @@ static bool initI2s() {
 
   err = i2s_channel_init_tdm_mode(i2sRx, &tdmCfg);
   if (err != ESP_OK) {
-    Serial.printf("[I2S] RX init failed: %d\n", err);
+    WALKIE_LOG_PRINTF("[I2S] RX init failed: %d\n", err);
     return false;
   }
   err = i2s_channel_enable(i2sRx);
   if (err != ESP_OK) {
-    Serial.printf("[I2S] RX enable failed: %d\n", err);
+    WALKIE_LOG_PRINTF("[I2S] RX enable failed: %d\n", err);
     return false;
   }
   logI2sInfo("TX", i2sTx);
@@ -357,7 +286,7 @@ bool initAudioHardware() {
   }
   bool ok = es8311.begin(AUDIO_SAMPLE_RATE, AUDIO_OUTPUT_VOLUME);
   ok &= es7210.begin();
-  Serial.printf("[Audio] codec init %s\n", ok ? "OK" : "failed");
+  WALKIE_LOG_PRINTF("[Audio] codec init %s\n", ok ? "OK" : "failed");
   return ok;
 }
 
@@ -374,11 +303,11 @@ static bool readMicFrame(int16_t *samples, size_t sampleCount) {
     micInputPeak = 0;
     micInputClipCount = 0;
     uint32_t now = millis();
-    if (micReadFailures <= 3 || now - lastMicFailureLog >= 1000) {
+    if (ENABLE_DEBUG_LOG && (micReadFailures <= 3 || now - lastMicFailureLog >= 1000)) {
       lastMicFailureLog = now;
       i2s_chan_info_t info = {};
       esp_err_t infoErr = i2s_channel_get_info(i2sRx, &info);
-      Serial.printf("[I2S] mic read failed err=%d bytes=%u want=%u timeout=%ums info=%d mode=%d enabled=%d mclk=%u bclk=%u dma=%u\n",
+      WALKIE_LOG_PRINTF("[I2S] mic read failed err=%d bytes=%u want=%u timeout=%ums info=%d mode=%d enabled=%d mclk=%u bclk=%u dma=%u\n",
                     err,
                     (unsigned)bytesRead,
                     (unsigned)bytesToRead,
@@ -406,7 +335,13 @@ static bool readMicFrame(int16_t *samples, size_t sampleCount) {
 
 static void writeSpeakerFrame(const int16_t *samples, size_t sampleCount) {
   size_t bytesWritten = 0;
-  i2s_channel_write(i2sTx, samples, sampleCount * sizeof(int16_t), &bytesWritten, portMAX_DELAY);
+  size_t wanted = sampleCount * sizeof(int16_t);
+  esp_err_t err = i2s_channel_write(i2sTx, samples, wanted, &bytesWritten, AUDIO_MIC_READ_TIMEOUT_MS);
+  if (err == ESP_OK && bytesWritten == wanted) {
+    speakerFramesWritten++;
+  } else {
+    speakerWriteFailures++;
+  }
 }
 
 static void setSpeakerPowerAmp(bool enable) {
@@ -425,7 +360,7 @@ void clearAudioBuffers() {
 
 static void logAudioSleepStep(const char *step, esp_err_t err) {
   if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-    Serial.printf("[Audio] %s failed: %s\n", step, esp_err_to_name(err));
+    WALKIE_LOG_PRINTF("[Audio] %s failed: %s\n", step, esp_err_to_name(err));
   }
 }
 
@@ -441,19 +376,19 @@ void prepareAudioSleep() {
     logAudioSleepStep("RX disable", i2s_channel_disable(i2sRx));
   }
   if (!es8311.sleep()) {
-    Serial.println("[Audio] ES8311 sleep failed");
+    WALKIE_LOG_PRINTLN("[Audio] ES8311 sleep failed");
   }
   if (!es7210.sleep()) {
-    Serial.println("[Audio] ES7210 sleep failed");
+    WALKIE_LOG_PRINTLN("[Audio] ES7210 sleep failed");
   }
 }
 
 void resumeAudioFromSleep() {
   if (!es8311.resume(AUDIO_SAMPLE_RATE, AUDIO_OUTPUT_VOLUME)) {
-    Serial.println("[Audio] ES8311 resume failed");
+    WALKIE_LOG_PRINTLN("[Audio] ES8311 resume failed");
   }
   if (!es7210.resume()) {
-    Serial.println("[Audio] ES7210 resume failed");
+    WALKIE_LOG_PRINTLN("[Audio] ES7210 resume failed");
   }
   if (i2sTx) {
     logAudioSleepStep("TX enable", i2s_channel_enable(i2sTx));
@@ -469,7 +404,8 @@ static void codec2Task(void *parameter) {
   (void)parameter;
   struct CODEC2 *codec = codec2_create(CODEC2_MODE_3200);
   if (!codec) {
-    Serial.println("[Codec2] create failed");
+    startupError = 1;
+    WALKIE_LOG_PRINTLN("[Codec2] create failed");
     vTaskDelete(nullptr);
     return;
   }
@@ -483,12 +419,18 @@ static void codec2Task(void *parameter) {
   int16_t *decodedSamples = (int16_t *)malloc(sampleCount * sizeof(int16_t));
   uint8_t *bits = (uint8_t *)malloc(compressSize);
   if (!micSamples || !decodedSamples || !bits) {
-    Serial.println("[Codec2] buffer allocation failed");
+    startupError = 2;
+    WALKIE_LOG_PRINTLN("[Codec2] buffer allocation failed");
+    free(micSamples);
+    free(decodedSamples);
+    free(bits);
+    codec2_destroy(codec);
     vTaskDelete(nullptr);
     return;
   }
 
-  Serial.printf("[Codec2] samples=%d bytes=%d packet_frames=%u\n", sampleCount, compressSize, framesPerPacket);
+  WALKIE_LOG_PRINTF("[Codec2] samples=%d bytes=%d packet_frames=%u\n", sampleCount, compressSize, framesPerPacket);
+  codecTaskReady = true;
 
   bool txAudioActive = false;
   uint8_t txSkipFrames = 0;
@@ -510,37 +452,49 @@ static void codec2Task(void *parameter) {
         txSkipFrames = TX_START_SKIP_FRAMES;
         txProcessor.reset();
         lastAudioTxLog = millis();
-        Serial.printf("[Audio] TX start, mic slot=%u\n", selectedMicSlot);
+        WALKIE_LOG_PRINTF("[Audio] TX start, mic slot=%u\n", selectedMicSlot);
       }
 
       for (uint8_t i = 0; i < framesPerPacket; i++) {
-        if (!readMicFrame(micSamples, sampleCount)) {
-          memset(micSamples, 0, sampleCount * sizeof(int16_t));
-          txSilenceFallbackFrames++;
+        // A packet contains 30 frames. Yield and recheck PTT on every frame,
+        // including muted frames and while draining queued I2S samples.
+        vTaskDelay(1);
+        if (!transmissionMode || audioSuspended) {
+          break;
+        }
+        bool micReadOk = readMicFrame(micSamples, sampleCount);
+        if (!transmissionMode || audioSuspended) {
+          break;
+        }
+        // An I2S failure is not a valid silent microphone frame.
+        if (!micReadOk) {
+          continue;
         }
         if (txSkipFrames > 0) {
-          txProcessor.primeNoiseFloor(micSamples, sampleCount);
           txSkipFrames--;
           continue;
         }
         if (!txProcessor.process(micSamples, sampleCount)) {
-          txGatedFrames++;
           continue;
         }
         codec2_encode(codec, bits, (short *)micSamples);
-        loraSendBuffer.push(bits, compressSize);
+        // Slow LoRa settings cannot carry continuous Codec2 audio. Bound the
+        // backlog to the preallocated ten packets instead of growing forever.
+        if (transmissionMode && !audioSuspended &&
+            loraSendBuffer.available() + compressSize <= LORA_TRANSMISSION_DATA_SIZE * 10) {
+          loraSendBuffer.push(bits, compressSize);
+        }
         txEncodedFrames++;
       }
 
       uint32_t now = millis();
       if (now - lastAudioTxLog >= 1000) {
         lastAudioTxLog = now;
-        Serial.printf("[Audio] tx queued=%uB frames=%u gated=%u mic_fail=%u fallback=%u slot=%u raw=%u/%u clip=%u proc=%u/%u clip=%u noise=%u gate=%u last_err=%d bytes=%u/%u\n",
+        WALKIE_LOG_PRINTF("[Audio] tx queued=%uB frames=%u muted=%u mic_fail=%u slot=%u raw=%u/%u clip=%u proc=%u/%u clip=%u threshold=%u voice=%u last_err=%d bytes=%u/%u\n",
                       (unsigned)loraSendBuffer.available(),
                       (unsigned)txEncodedFrames,
-                      (unsigned)txGatedFrames,
+                      (unsigned)txMutedFrames,
                       (unsigned)micReadFailures,
-                      (unsigned)txSilenceFallbackFrames,
                       selectedMicSlot,
                       (unsigned)micInputLevel,
                       (unsigned)micInputPeak,
@@ -548,7 +502,7 @@ static void codec2Task(void *parameter) {
                       (unsigned)txProcessedLevel,
                       (unsigned)txProcessedPeak,
                       (unsigned)txProcessedClipCount,
-                      (unsigned)txNoiseFloor,
+                      (unsigned)TX_SILENCE_LEVEL,
                       txVoiceGateOpen ? 1 : 0,
                       (int)lastMicReadErr,
                       (unsigned)lastMicBytesRead,
@@ -556,12 +510,11 @@ static void codec2Task(void *parameter) {
       }
     } else {
       if (txAudioActive) {
-        Serial.printf("[Audio] TX stop, queued=%uB frames=%u gated=%u mic_fail=%u fallback=%u slot=%u raw=%u/%u clip=%u proc=%u/%u clip=%u noise=%u gate=%u last_err=%d bytes=%u/%u\n",
+        WALKIE_LOG_PRINTF("[Audio] TX stop, queued=%uB frames=%u muted=%u mic_fail=%u slot=%u raw=%u/%u clip=%u proc=%u/%u clip=%u threshold=%u voice=%u last_err=%d bytes=%u/%u\n",
                       (unsigned)loraSendBuffer.available(),
                       (unsigned)txEncodedFrames,
-                      (unsigned)txGatedFrames,
+                      (unsigned)txMutedFrames,
                       (unsigned)micReadFailures,
-                      (unsigned)txSilenceFallbackFrames,
                       selectedMicSlot,
                       (unsigned)micInputLevel,
                       (unsigned)micInputPeak,
@@ -569,7 +522,7 @@ static void codec2Task(void *parameter) {
                       (unsigned)txProcessedLevel,
                       (unsigned)txProcessedPeak,
                       (unsigned)txProcessedClipCount,
-                      (unsigned)txNoiseFloor,
+                      (unsigned)TX_SILENCE_LEVEL,
                       txVoiceGateOpen ? 1 : 0,
                       (int)lastMicReadErr,
                       (unsigned)lastMicBytesRead,
@@ -579,16 +532,20 @@ static void codec2Task(void *parameter) {
       txProcessor.reset();
     }
 
-    while (loraReceiveBuffer.pop(bits, compressSize)) {
+    while (!transmissionMode && !audioSuspended && loraReceiveBuffer.pop(bits, compressSize)) {
       codec2_decode(codec, (short *)decodedSamples, bits);
+      if (transmissionMode || audioSuspended) {
+        break;
+      }
       playbackProcessor.process(decodedSamples, sampleCount);
       playbackBuffer.push(decodedSamples, sampleCount);
       rxDecodedFrames++;
+      vTaskDelay(1);
 
       uint32_t now = millis();
       if (now - lastAudioRxLog >= 1000) {
         lastAudioRxLog = now;
-        Serial.printf("[Audio] rx frames=%u rfq=%uB playq=%uS dec=%u/%u clip=%u out=%u/%u clip=%u pa=%u\n",
+        WALKIE_LOG_PRINTF("[Audio] rx frames=%u rfq=%uB playq=%uS dec=%u/%u clip=%u out=%u/%u clip=%u pa=%u\n",
                       (unsigned)rxDecodedFrames,
                       (unsigned)loraReceiveBuffer.available(),
                       (unsigned)playbackBuffer.available(),
@@ -606,6 +563,7 @@ static void codec2Task(void *parameter) {
 
 static void speakerTask(void *parameter) {
   (void)parameter;
+  speakerTaskReady = true;
   static constexpr size_t frameSamples = 160;
   int16_t out[frameSamples];
   uint32_t lastAudioFrameAt = 0;
@@ -630,9 +588,35 @@ static void speakerTask(void *parameter) {
   }
 }
 
-void startAudioTasks() {
-  xTaskCreate(codec2Task, "Codec2_Task", 32000, nullptr, 6, nullptr);
-  xTaskCreate(speakerTask, "Speaker_Task", 30000, nullptr, 6, nullptr);
+bool startAudioTasks() {
+  if (xTaskCreate(codec2Task, "Codec2_Task", 32000, nullptr, 6, nullptr) != pdPASS) {
+    startupError = 3;
+    return false;
+  }
+  if (xTaskCreate(speakerTask, "Speaker_Task", 30000, nullptr, 6, nullptr) != pdPASS) {
+    startupError = 4;
+    return false;
+  }
+  return true;
+}
+
+int audioStartupError() {
+  return startupError;
+}
+
+void logAudioDiagnostics() {
+  static uint32_t lastLog = 0;
+  uint32_t now = millis();
+  if (!VOICE_DEBUG_LOG || now - lastLog < 2000) {
+    return;
+  }
+  lastLog = now;
+  WALKIE_LOG_PRINTF("[AudioStatus] codec=%u speaker=%u error=%d tx_frames=%u rx_frames=%u "
+                "txq=%uB mic_fail=%u play_frames=%u play_fail=%u pa=%u heap=%u psram=%u\n",
+                unsigned(codecTaskReady), unsigned(speakerTaskReady), int(startupError),
+                unsigned(txEncodedFrames), unsigned(rxDecodedFrames), unsigned(loraSendBuffer.available()),
+                unsigned(micReadFailures), unsigned(speakerFramesWritten), unsigned(speakerWriteFailures),
+                unsigned(speakerPowerAmpEnabled), unsigned(ESP.getFreeHeap()), unsigned(ESP.getFreePsram()));
 }
 
 bool audioPopTxPacket(uint8_t *packet, size_t packetSize) {

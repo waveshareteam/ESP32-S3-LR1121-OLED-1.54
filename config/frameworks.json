@@ -1,0 +1,63 @@
+{
+  "target": "esp32s3",
+  "esp-idf": [
+    "v5.5.5",
+    "v6.1"
+  ],
+  "idf_version_range": ">=5.5.5,<6.3",
+  "esp-idf-development": [
+    {
+      "version": "v6.2-dev.624ded60",
+      "ref": "624ded6069c4399e190d62b39ea67d2789ea496f"
+    }
+  ],
+  "arduino": [
+    "3.3.12"
+  ],
+  "lvgl": "9.5.0",
+  "lvgl_component": "9.5.0",
+  "board_manager": "0.7.3~1",
+  "bmgr_assist": "0.8.3",
+  "idf_component_manager": {
+    "v5.5.5": "2.5.0",
+    "v6.1": "3.0.3",
+    "v6.2-dev.624ded60": "3.1.2"
+  },
+  "board": "esp32_s3_lr1121_oled_1_54_xf",
+  "lvgl_adapter": "0.7.0",
+  "audio_player": "1.1.0",
+  "fqbn": "esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,PSRAM=opi,USBMode=hwcdc,CDCOnBoot=cdc",
+  "firmware_sources": [
+    "firmware/12_factory_demo"
+  ],
+  "expected_counts": {
+    "esp-idf": 12,
+    "arduino": 11
+  },
+  "idf_display_examples": [
+    "08_oled_ssd1309",
+    "10_walkie_talkie",
+    "12_factory_demo"
+  ],
+  "arduino_lvgl_examples": [
+    "08_oled_ssd1309"
+  ],
+  "idf_audio_examples": [
+    "04_microphone",
+    "05_speaker",
+    "10_walkie_talkie",
+    "12_factory_demo"
+  ],
+  "idf_sensor_examples": [
+    "06_rtc_pcf85063",
+    "07_bat_bq27220",
+    "10_walkie_talkie",
+    "12_factory_demo"
+  ],
+  "idf_radio_examples": [
+    "09_lora_ping_pong",
+    "10_walkie_talkie",
+    "11_lorawan_starter",
+    "12_factory_demo"
+  ]
+}

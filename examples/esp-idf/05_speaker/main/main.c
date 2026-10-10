@@ -13,9 +13,10 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include "esp_log.h"
+#include "board_support.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "bsp_board_extra.h"
+#include "board_extra.h"
 
 static const char *TAG = "speaker_main";
 
@@ -34,12 +35,6 @@ static bool btn_prev_flag = false;
 static bool btn_play_pause_flag = false;
 static bool btn_volume_flag = false;
 
-#define UP_IO_NUM        0
-#define DOWN_IO_NUM      4
-#define RESUME_IO_NUM    5
-#define VOLUME_IO_NUM    6
-#define BUTTON_ACTIVE_LEVEL  0
-#define DOWN_ACTIVE_LEVEL  1
 
 static void button_event_cb(void *arg, void *data)
 {
@@ -48,16 +43,16 @@ static void button_event_cb(void *arg, void *data)
 
     if (BUTTON_SINGLE_CLICK == event) {
         switch (button_id) {
-        case UP_IO_NUM:
+        case BOOT_KEY_GPIO:
             btn_next_flag = true;
             break;
-        case DOWN_IO_NUM:
+        case PWR_KEY_GPIO:
             btn_prev_flag = true;
             break;
-        case RESUME_IO_NUM:
+        case MENU_KEY_GPIO:
             btn_play_pause_flag = true;
             break;
-        case VOLUME_IO_NUM:
+        case PTT_KEY_GPIO:
             btn_volume_flag = true;
             is_volume = true;
             break;
@@ -65,7 +60,7 @@ static void button_event_cb(void *arg, void *data)
             break;
         }
     } else if (BUTTON_DOUBLE_CLICK == event) {
-        if (button_id == VOLUME_IO_NUM) {
+        if (button_id == PTT_KEY_GPIO) {
             btn_volume_flag = true;
             is_volume = false;
         }
@@ -75,7 +70,7 @@ static void button_event_cb(void *arg, void *data)
 static esp_err_t play_track(uint8_t index, bool keep_pause_state)
 {
     current_mp3_index = index;
-    esp_err_t ret = bsp_extra_player_play_file(mp3_path[current_mp3_index]);
+    esp_err_t ret = board_extra_player_play_file(mp3_path[current_mp3_index]);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to play %s: %s", mp3_path[current_mp3_index], esp_err_to_name(ret));
         return ret;
@@ -160,18 +155,10 @@ static void list_files(const char *base_path)
 
 static esp_err_t register_button(int gpio_num, int active_level, bool double_click)
 {
-    const button_config_t btn_cfg = {0};
-    button_gpio_config_t btn_gpio_cfg = {
-        .gpio_num = gpio_num,
-        .active_level = active_level,
-    };
-    button_handle_t btn = NULL;
-
-    esp_err_t ret = iot_button_new_gpio_device(&btn_cfg, &btn_gpio_cfg, &btn);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-
+    (void)active_level; // Active level belongs to Board Manager YAML.
+    button_handle_t btn = board_button_for_gpio((gpio_num_t)gpio_num);
+    if (!btn) return ESP_FAIL;
+    esp_err_t ret;
     ret = iot_button_register_cb(btn, BUTTON_SINGLE_CLICK, NULL, button_event_cb, (void *)(intptr_t)gpio_num);
     if (ret != ESP_OK) {
         return ret;
@@ -188,7 +175,7 @@ static esp_err_t register_button(int gpio_num, int active_level, bool double_cli
 
 void app_main(void)
 {
-    esp_err_t ret = bsp_sdcard_mount();
+    esp_err_t ret = board_sdcard_mount();
     if (ret == ESP_OK) {
         list_files(BSP_SD_MOUNT_POINT"/music");
         if (mp3_num == 0) {
@@ -200,27 +187,27 @@ void app_main(void)
         return;
     }
 
-    ret = bsp_extra_codec_init();
+    ret = board_extra_codec_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize codec: %s", esp_err_to_name(ret));
         return;
     }
 
-    ret = bsp_extra_codec_volume_set(mp3_volume, NULL);
+    ret = board_extra_codec_volume_set(mp3_volume, NULL);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set volume: %s", esp_err_to_name(ret));
         return;
     }
 
-    bsp_extra_player_register_callback(speaker_callback, NULL);
+    board_extra_player_register_callback(speaker_callback, NULL);
 
-    ret = bsp_extra_player_init();
+    ret = board_extra_player_init();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize player: %s", esp_err_to_name(ret));
         return;
     }
 
-    ret = bsp_extra_player_play_file(mp3_path[current_mp3_index]);
+    ret = board_extra_player_play_file(mp3_path[current_mp3_index]);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to play initial file %s: %s", mp3_path[current_mp3_index], esp_err_to_name(ret));
         return;
@@ -231,10 +218,10 @@ void app_main(void)
         int active_level;
         bool double_click;
     } buttons[] = {
-        {UP_IO_NUM, BUTTON_ACTIVE_LEVEL, false},
-        {RESUME_IO_NUM, BUTTON_ACTIVE_LEVEL, false},
-        {VOLUME_IO_NUM, BUTTON_ACTIVE_LEVEL, true},
-        {DOWN_IO_NUM, DOWN_ACTIVE_LEVEL, false},
+        {BOOT_KEY_GPIO, BUTTON_ACTIVE_LEVEL, false},
+        {MENU_KEY_GPIO, BUTTON_ACTIVE_LEVEL, false},
+        {PTT_KEY_GPIO, BUTTON_ACTIVE_LEVEL, true},
+        {PWR_KEY_GPIO, WS_POWER_ACTIVE_LEVEL, false},
     };
 
     for (size_t i = 0; i < sizeof(buttons) / sizeof(buttons[0]); ++i) {
@@ -281,7 +268,7 @@ void app_main(void)
             } else {
                 mp3_volume = (mp3_volume < 5) ? 0 : (mp3_volume - 5);
             }
-            ret = bsp_extra_codec_volume_set(mp3_volume, NULL);
+            ret = board_extra_codec_volume_set(mp3_volume, NULL);
             if (ret != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to set volume %u: %s", mp3_volume, esp_err_to_name(ret));
             }

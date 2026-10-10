@@ -16,7 +16,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include "app_config.h"
-#include "lv_examples.h"
+#include "lvgl.h"
 #include "app_state.h"
 #include "audio_pipeline.h"
 #include "peripheral_guard.h"
@@ -57,7 +57,7 @@ static bool radio_tx_busy = false;
 
 static bool is_button_pressed(gpio_num_t gpio)
 {
-    return gpio_get_level(gpio) == BUTTON_ACTIVE_LEVEL;
+    return gpio_get_level(gpio) == board_button_active_level(gpio);
 }
 
 static uint32_t read_button_state_mask()
@@ -110,7 +110,7 @@ static bool is_valid_rtc_time(const pcf85063a_datetime_t &time)
 static bool read_rtc_time()
 {
     pcf85063a_datetime_t new_time = {};
-    esp_err_t ret = bsp_get_rtc_time_date(&new_time);
+    esp_err_t ret = board_get_rtc_time_date(&new_time);
     if (ret != ESP_OK || !is_valid_rtc_time(new_time)) {
         return false;
     }
@@ -122,28 +122,28 @@ static bool read_rtc_time()
 // LVGL calls must hold the display lock because the adapter task also runs LVGL.
 static void refresh_time_status_now()
 {
-    bsp_display_lock(-1);
+    board_display_lock(-1);
     ui_refresh_time_status();
-    bsp_display_unlock();
+    board_display_unlock();
 }
 
 static void refresh_battery_status_now()
 {
-    bsp_display_lock(-1);
+    board_display_lock(-1);
     ui_refresh_battery_status();
-    bsp_display_unlock();
+    board_display_unlock();
 }
 
 static void start_status_timer()
 {
-    bsp_display_lock(-1);
+    board_display_lock(-1);
     lv_timer_create(lvgl_rtc_bat_timer_cb, 300, NULL);
-    bsp_display_unlock();
+    board_display_unlock();
 }
 
 static void request_ptt_status_refresh()
 {
-    if (!bsp_display_lock(-1)) {
+    if (!board_display_lock(-1)) {
         return;
     }
 
@@ -151,14 +151,14 @@ static void request_ptt_status_refresh()
     if (timer) {
         lv_timer_set_repeat_count(timer, 1);
     }
-    bsp_display_unlock();
+    board_display_unlock();
 }
 
 static void enable_light_sleep_wakeup_sources()
 {
     for (gpio_num_t gpio : WAKE_BUTTON_GPIOS) {
         gpio_wakeup_disable(gpio);
-        ESP_ERROR_CHECK(gpio_wakeup_enable(gpio, GPIO_INTR_LOW_LEVEL));
+        ESP_ERROR_CHECK(gpio_wakeup_enable(gpio, board_button_active_level(gpio) ? GPIO_INTR_HIGH_LEVEL : GPIO_INTR_LOW_LEVEL));
     }
 
     gpio_intr_disable(LORA_WAKE_GPIO);
@@ -205,11 +205,15 @@ static void enter_low_power_sleep(uint32_t *last_rtc_time,
         ESP_LOGW(TAG, "Radio receive before sleep failed, state: %d", radio_state);
     }
 
-    audio_pipeline_prepare_sleep();
+    if (audio_pipeline_prepare_sleep() != ESP_OK) {
+        ESP_LOGW(TAG, "Audio did not stop cleanly; canceling light sleep");
+        resume_button_events_after_sleep();
+        return;
+    }
 
-    bsp_display_lock(-1);
-    bsp_display_backlight_off();
-    bsp_display_unlock();
+    board_display_lock(-1);
+    board_display_backlight_off();
+    board_display_unlock();
 
     vTaskDelay(pdMS_TO_TICKS(50));
     enable_light_sleep_wakeup_sources();
@@ -221,10 +225,10 @@ static void enter_low_power_sleep(uint32_t *last_rtc_time,
         ESP_LOGW(TAG, "Light sleep failed: %s", esp_err_to_name(sleep_ret));
     }
 
-    bsp_display_lock(-1);
-    bsp_display_backlight_on();
+    board_display_lock(-1);
+    board_display_backlight_on();
     ui_refresh_status_bar();
-    bsp_display_unlock();
+    board_display_unlock();
 
     wait_for_wake_buttons_release();
     resume_button_events_after_sleep();
@@ -289,23 +293,21 @@ static void handle_low_power_idle(uint32_t *last_activity_time,
 // Bring up shared peripherals in a guarded order: I2C devices first, radio last.
 static void hardware_init()
 {
-    bsp_display_lock(-1);
+    board_display_lock(-1);
     peripheral_lock();
-    bsp_rtc_init();
+    board_rtc_init();
     read_rtc_time();
     peripheral_unlock();
-    bsp_display_unlock();
+    board_display_unlock();
     refresh_time_status_now();
 
-    bsp_display_lock(-1);
+    board_display_lock(-1);
     peripheral_lock();
-    bsp_bat_init(1000);
-    bsp_get_bat_info(&bat_info);
+    board_bat_init(1000);
+    board_get_bat_info(&bat_info);
     peripheral_unlock();
-    bsp_display_unlock();
+    board_display_unlock();
     refresh_battery_status_now();
-
-    bsp_sdcard_mount();
 
     peripheral_lock();
     int state = radio_apply_current_config(true);
@@ -320,25 +322,12 @@ static void hardware_init()
 
 static void display_init()
 {
-    const bsp_display_cfg_t cfg = {
-        .lv_adapter_cfg = {
-            .task_stack_size = (8 * 1024),
-            .task_priority = ESP_LV_ADAPTER_DEFAULT_TASK_PRIORITY,
-            .task_core_id = ESP_LV_ADAPTER_DEFAULT_TASK_CORE_ID,
-            .tick_period_ms = ESP_LV_ADAPTER_DEFAULT_TICK_PERIOD_MS,
-            .task_min_delay_ms = ESP_LV_ADAPTER_DEFAULT_TASK_MIN_DELAY_MS,
-            .task_max_delay_ms = ESP_LV_ADAPTER_DEFAULT_TASK_MAX_DELAY_MS,
-            .stack_in_psram = false,
-        },
-        .rotation = ESP_LV_ADAPTER_ROTATE_0,
-        .tear_avoid_mode = ESP_LV_ADAPTER_TEAR_AVOID_MODE_DEFAULT,
-        .touch_flags = {0, 0, 0}
-    };
-    
-    bsp_display_start_with_config(&cfg);
-    bsp_display_lock(-1);
+    if (!board_display_start() || !board_display_lock(-1)) {
+        ESP_LOGE(TAG, "Display initialization failed");
+        halt_task();
+    }
     ui_init();
-    bsp_display_unlock();
+    board_display_unlock();
 }
 
 static void create_tasks()
@@ -434,36 +423,36 @@ static void handle_periodic_tasks(uint32_t *last_rtc_time,
 
     // RTC and battery reads share I2C with the OLED, so they are serialized here.
     if (now - *last_rtc_time >= pdMS_TO_TICKS(1000)) {
-        if (bsp_display_lock(-1)) {
+        if (board_display_lock(-1)) {
             peripheral_lock();
             read_rtc_time();
             peripheral_unlock();
-            bsp_display_unlock();
+            board_display_unlock();
             *last_rtc_time = now;
         }
     }
 
     if (now - *last_charge_time >= pdMS_TO_TICKS(100)) {
         bool was_charging = bat_info.charging;
-        if (bsp_display_lock(-1)) {
+        if (board_display_lock(-1)) {
             peripheral_lock();
-            bsp_update_bat_charge_status(&bat_info);
+            board_update_bat_charge_status(&bat_info);
             peripheral_unlock();
             if (was_charging != bat_info.charging) {
                 ui_refresh_battery_status();
             }
-            bsp_display_unlock();
+            board_display_unlock();
             *last_charge_time = now;
         }
     }
 
     if (now - *last_bat_time >= pdMS_TO_TICKS(1000)) {
-        if (bsp_display_lock(-1)) {
+        if (board_display_lock(-1)) {
             peripheral_lock();
-            bsp_get_bat_info(&bat_info);
+            board_get_bat_info(&bat_info);
             peripheral_unlock();
             ui_refresh_battery_status();
-            bsp_display_unlock();
+            board_display_unlock();
             *last_bat_time = now;
         }
     }
@@ -471,7 +460,11 @@ static void handle_periodic_tasks(uint32_t *last_rtc_time,
 
 static void handle_rx_done()
 {
+    static uint32_t rx_ok = 0, rx_integrity_error = 0, rx_other_error = 0;
+
     peripheral_lock();
+    // readData() clears the hardware IRQ flags, including the integrity cause.
+    const uint32_t irq = radio.getIrqFlags();
     size_t raw_payload_len = radio.getPacketLength();
     size_t payload_len = raw_payload_len;
     if (payload_len > sizeof(Send_Receive_Package))
@@ -488,19 +481,42 @@ static void handle_rx_done()
     }
 
     int read_state = radio.readData(Send_Receive_Package, payload_len);
-    if (read_state == RADIOLIB_ERR_NONE && raw_payload_len == LORA_TRANSMISSION_DATA_SIZE) {
-        printf("[LR1121] Packet received! Length: %u bytes\n", (unsigned)raw_payload_len);
-        audio_pipeline_push_rx_packet(Send_Receive_Package, payload_len);
-    } else {
-        printf("[LR1121] Drop packet, len: %u, state: %d\n", (unsigned)raw_payload_len, read_state);
-    }
+    const float rssi = radio.getRSSI();
+    const bool is_lora = radio_modem == RADIO_MODEM_LORA;
+    const float snr = is_lora ? radio.getSNR() : 0;
 
+    // Rearm RX before queueing audio or printing diagnostics.
     int state = radio.startReceive();
+    peripheral_unlock();
     if (state != RADIOLIB_ERR_NONE) {
-        peripheral_unlock();
         halt_listen_error(state);
     }
-    peripheral_unlock();
+
+    if (read_state == RADIOLIB_ERR_NONE && raw_payload_len == LORA_TRANSMISSION_DATA_SIZE) {
+        ++rx_ok;
+        audio_pipeline_push_rx_packet(Send_Receive_Package, payload_len);
+        printf("[LR1121] Packet received! Length: %u bytes", (unsigned)raw_payload_len);
+    } else {
+        if (read_state == RADIOLIB_ERR_CRC_MISMATCH) {
+            ++rx_integrity_error;
+        } else {
+            ++rx_other_error;
+        }
+        printf("[LR1121] Drop packet, len: %u, state: %d (%s)",
+               (unsigned)raw_payload_len, read_state,
+               read_state == RADIOLIB_ERR_CRC_MISMATCH ? "CRC/header error" : "read/length error");
+    }
+    if (is_lora) {
+        printf(", modem=LoRa RSSI=%.1f dBm SNR=%.1f dB", (double)rssi, (double)snr);
+    } else {
+        printf(", modem=GFSK RSSI=%.1f dBm SNR=n/a", (double)rssi);
+    }
+    printf(" irq=0x%08lx crc=%u header=%u rx_done=%u | ok=%lu integrity_err=%lu other_err=%lu\n",
+           (unsigned long)irq,
+           (unsigned)!!(irq & RADIOLIB_LR11X0_IRQ_CRC_ERR),
+           (unsigned)!!(irq & RADIOLIB_LR11X0_IRQ_HEADER_ERR),
+           (unsigned)!!(irq & RADIOLIB_LR11X0_IRQ_RX_DONE),
+           (unsigned long)rx_ok, (unsigned long)rx_integrity_error, (unsigned long)rx_other_error);
 }
 
 void lora_irq_process()

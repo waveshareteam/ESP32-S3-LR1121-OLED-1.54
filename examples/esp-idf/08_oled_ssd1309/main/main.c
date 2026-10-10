@@ -4,14 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include "bsp/esp-bsp.h"
+#include "board_support.h"
 #include "esp_log.h"
 
 static const char *TAG = "oled_ssd1309";
 
-static void lvgl_oled_demo(void)
+static void lvgl_oled_demo(lv_display_t *display)
 {
-    lv_obj_t *scr = lv_screen_active();
+    lv_obj_t *scr = lv_display_get_screen_active(display);
     lv_obj_set_style_text_font(scr, &lv_font_unscii_8, 0);
 
     lv_obj_t *label_title = lv_label_create(scr);
@@ -35,16 +35,17 @@ static void lvgl_oled_demo(void)
 
 void app_main(void)
 {
-    esp_err_t ret = bsp_display_start();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start display: %s", esp_err_to_name(ret));
+    lv_display_t *display = board_display_start();
+    if (display == NULL) {
+        ESP_LOGE(TAG, "Failed to start display");
         return;
     }
 
-    if (!bsp_display_lock(-1)) {
+    if (!board_display_lock(-1)) {
         ESP_LOGE(TAG, "Failed to lock display");
         return;
     }
-    lvgl_oled_demo();
-    bsp_display_unlock();
+    lvgl_oled_demo(display);
+    board_display_unlock();
+    ESP_LOGI(TAG, "OLED demo ready");
 }

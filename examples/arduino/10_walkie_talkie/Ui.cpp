@@ -58,24 +58,26 @@ static uint8_t rollerAnimFromIndex = 0;
 static uint8_t rollerAnimToIndex = 0;
 static uint32_t rollerAnimStart = 0;
 
+static bool displayReady = false;
 static void oledWriteCommandList(const uint8_t *commands, size_t len);
 static void applyOledSsd1309Tuning();
 
 bool initDisplay() {
   bool ok = gfx->begin(400000);
   if (!ok) {
-    Serial.println("[OLED] begin failed");
-  } else {
-    applyOledSsd1309Tuning();
+    WALKIE_LOG_PRINTLN("[OLED] begin failed");
+    return false;
   }
+  applyOledSsd1309Tuning();
   gfx->fillScreen(UI_BLACK);
   gfx->flush();
+  displayReady = true;
   return ok;
 }
 
 void initUiButtons() {
   btnBoot.begin(PIN_KEY_BOOT);
-  btnPwr.begin(PIN_KEY_PWR);
+  btnPwr.begin(PIN_KEY_PWR, POWER_BUTTON_ACTIVE_LEVEL);
   btnMenu.begin(PIN_KEY_MENU);
 }
 
@@ -256,7 +258,7 @@ static void flushBatteryStatusFast() {
   drawStatusFastText(page, 114 - batTextW, 0, text);
 
   const UiBitmap *icon = &kIconBattery4;
-  if (batteryValid && batteryCharging) {
+  if (batteryChargeValid && batteryCharging) {
     icon = &kIconCharge;
   } else if (batteryValid) {
     icon = batterySoc > 75 ? &kIconBattery4 : batterySoc > 50 ? &kIconBattery3 : batterySoc > 25 ? &kIconBattery2 : &kIconBattery1;
@@ -354,7 +356,7 @@ static void drawModeBandButton(int16_t y) {
 
 static void drawBatteryIcon() {
   const UiBitmap *icon = &kIconBattery4;
-  if (batteryValid && batteryCharging) {
+  if (batteryChargeValid && batteryCharging) {
     icon = &kIconCharge;
   } else if (batteryValid) {
     icon = batterySoc > 75 ? &kIconBattery4 : batterySoc > 50 ? &kIconBattery3 : batterySoc > 25 ? &kIconBattery2 : &kIconBattery1;
@@ -548,6 +550,27 @@ void handleUiButtons() {
   btnPwr.update();
   btnMenu.update();
 
+  // Confirm the selected target immediately, even while its animation is running.
+  if (btnMenu.takePressed()) {
+    if (pageAnimating) {
+      currentPage = targetPage;
+      pageAnimating = false;
+    }
+    rollerAnimating = false;
+    btnBoot.takePressOrRepeat();
+    btnPwr.takePressOrRepeat();
+    if (currentPage == PAGE_MAIN) {
+      openSettings(focusedButton);
+    } else {
+      applySettingSelection(settingPage, settingEditIndex);
+      currentPage = PAGE_MAIN;
+      targetPage = PAGE_MAIN;
+      // Render the selection immediately; radio configuration is queued separately.
+      refreshUiNow();
+    }
+    return;
+  }
+
   if (pageAnimating || rollerAnimating) {
     return;
   }
@@ -561,9 +584,6 @@ void handleUiButtons() {
       focusedButton = (focusedButton + 1) % MAIN_BUTTON_COUNT;
       markUiDirty();
     }
-    if (btnMenu.takePressed()) {
-      openSettings(focusedButton);
-    }
   } else {
     uint8_t count = optionCount(settingPage);
     if (btnBoot.takePressOrRepeat()) {
@@ -575,10 +595,6 @@ void handleUiButtons() {
       if (settingEditIndex + 1 < count) {
         startRollerMove(settingEditIndex + 1);
       }
-    }
-    if (btnMenu.takePressed()) {
-      applySettingSelection(settingPage, settingEditIndex);
-      startPageTransition(PAGE_MAIN);
     }
   }
 }
@@ -611,14 +627,16 @@ void periodicUi() {
 }
 
 void fatalError(const char *msg, int code) {
-  Serial.printf("[Fatal] %s: %d\n", msg, code);
-  gfx->fillScreen(UI_BLACK);
-  drawText(0, 12, "FATAL");
-  drawText(0, 24, msg);
-  char line[20];
-  snprintf(line, sizeof(line), "%d", code);
-  drawText(0, 36, line);
-  gfx->flush();
+  WALKIE_LOG_PRINTF("[Fatal] %s: %d\n", msg, code);
+  if (displayReady) {
+    gfx->fillScreen(UI_BLACK);
+    drawText(0, 12, "FATAL");
+    drawText(0, 24, msg);
+    char line[20];
+    snprintf(line, sizeof(line), "%d", code);
+    drawText(0, 36, line);
+    gfx->flush();
+  }
   while (true) {
     delay(1000);
   }

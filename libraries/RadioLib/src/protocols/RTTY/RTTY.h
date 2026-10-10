@@ -16,6 +16,7 @@
 */
 class RTTYClient: public RadioLibPrint {
   public:
+    using RadioLibPrint::write;
     /*!
       \brief Constructor for 2-FSK mode.
       \param phy Pointer to the wireless module providing PhysicalLayer communication.

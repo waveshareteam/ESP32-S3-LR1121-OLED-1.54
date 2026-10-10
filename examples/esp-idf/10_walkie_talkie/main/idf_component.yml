@@ -1,9 +1,6 @@
-## IDF Component Manager Manifest File
 dependencies:
+  idf: '>=5.5.5,<6.3'
   RadioLib:
-      # referenced locally because the example is a part of the repository itself
-      # under normal circumstances, it's preferable to reference the repository instead
-      # for other options, see https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/tools/idf-component-manager.html
-      path: ../../../../libraries/RadioLib
-      #git: https://github.com/jgromes/RadioLib.git
-
+    path: ../../../../libraries/RadioLib
+  waveshare/waveshare_boards:
+    version: "*"

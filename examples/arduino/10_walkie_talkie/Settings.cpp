@@ -25,6 +25,13 @@ static uint8_t lastPwr = 6;
 static uint8_t lastGfskBr = 1;
 static uint8_t lastGfskDev = 1;
 static uint8_t lastGfskRx = 1;
+// Initialized before the worker starts; only the worker updates this afterward.
+static RadioSettingsSnapshot savedSettings;
+
+RadioSettingsSnapshot captureRadioSettings() {
+  return {lastMd, lastBand, lastSf, lastBw, lastCr, lastGfskBr,
+          lastGfskDev, lastGfskRx, lastPwr, (uint16_t)(lastFreqMhz + 0.5f)};
+}
 
 static const uint8_t sfValues[] = {5, 6, 7, 8, 9, 10, 11, 12};
 static const float bwValues[] = {62.5f, 125.0f, 250.0f, 500.0f};
@@ -236,21 +243,49 @@ void loadRadioSettings() {
   }
   prefs.end();
   applyIndexesToRuntime();
+  savedSettings = captureRadioSettings();
 }
 
-static void saveRadioSettings() {
-  prefs.begin("radio", false);
-  prefs.putUChar("mode", lastMd);
-  prefs.putUChar("band", lastBand);
-  prefs.putUShort("freq", (uint16_t)(lastFreqMhz + 0.5f));
-  prefs.putUChar("sf", lastSf);
-  prefs.putUChar("bw", lastBw);
-  prefs.putUChar("cr", lastCr);
-  prefs.putUChar("gbr", lastGfskBr);
-  prefs.putUChar("gdev", lastGfskDev);
-  prefs.putUChar("grx", lastGfskRx);
-  prefs.putUChar("pwr", lastPwr);
-  prefs.end();
+bool saveRadioSettings(const RadioSettingsSnapshot &settings) {
+  Preferences storage;
+  if (!storage.begin("radio", false)) {
+    return false;
+  }
+  struct Field {
+    const char *key;
+    uint8_t value;
+    uint8_t *saved;
+  };
+  Field fields[] = {
+      {"mode", settings.mode, &savedSettings.mode},
+      {"band", settings.band, &savedSettings.band},
+      {"sf", settings.sf, &savedSettings.sf},
+      {"bw", settings.bw, &savedSettings.bw},
+      {"cr", settings.cr, &savedSettings.cr},
+      {"gbr", settings.gfskBr, &savedSettings.gfskBr},
+      {"gdev", settings.gfskDev, &savedSettings.gfskDev},
+      {"grx", settings.gfskRx, &savedSettings.gfskRx},
+      {"pwr", settings.power, &savedSettings.power},
+  };
+  bool ok = true;
+  for (const Field &field : fields) {
+    if (field.value != *field.saved) {
+      if (storage.putUChar(field.key, field.value) == sizeof(uint8_t)) {
+        *field.saved = field.value;
+      } else {
+        ok = false;
+      }
+    }
+  }
+  if (settings.frequencyMhz != savedSettings.frequencyMhz) {
+    if (storage.putUShort("freq", settings.frequencyMhz) == sizeof(uint16_t)) {
+      savedSettings.frequencyMhz = settings.frequencyMhz;
+    } else {
+      ok = false;
+    }
+  }
+  storage.end();
+  return ok;
 }
 
 uint8_t currentSettingIndex(uint8_t page) {
@@ -344,6 +379,10 @@ void settingOptionText(uint8_t page, uint8_t index, char *out, size_t outSize) {
 }
 
 void applySettingSelection(uint8_t page, uint8_t index) {
+  if (page > 6 || index >= optionCount(page) || index == currentSettingIndex(page)) {
+    return;
+  }
+
   switch (page) {
   case 0:
     lastMd = index;
@@ -380,7 +419,6 @@ void applySettingSelection(uint8_t page, uint8_t index) {
     break;
   }
   applyIndexesToRuntime();
-  saveRadioSettings();
   requestRadioReconfigure();
   markUiDirty();
 }

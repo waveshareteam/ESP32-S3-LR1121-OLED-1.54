@@ -89,6 +89,7 @@ static const uint8_t HellFont[64][RADIOLIB_HELL_FONT_WIDTH - 2] RADIOLIB_NONVOLA
 */
 class HellClient: public RadioLibPrint {
   public:
+    using RadioLibPrint::write;
     /*!
       \brief Constructor for 2-FSK mode.
       \param phy Pointer to the wireless module providing PhysicalLayer communication.

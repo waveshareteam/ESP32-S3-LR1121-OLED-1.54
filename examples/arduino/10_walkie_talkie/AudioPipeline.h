@@ -9,7 +9,9 @@
 #include <Arduino.h>
 
 bool initAudioHardware();
-void startAudioTasks();
+bool startAudioTasks();
+int audioStartupError();
+void logAudioDiagnostics();
 void clearAudioBuffers();
 void prepareAudioSleep();
 void resumeAudioFromSleep();

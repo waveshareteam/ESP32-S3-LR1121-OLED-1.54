@@ -14,6 +14,7 @@ struct ButtonState {
   static constexpr uint32_t REPEAT_INTERVAL_MS = 120;
 
   uint8_t pin = 0;
+  uint8_t activeLevel = LOW;
   bool stable = true;
   bool lastRead = true;
   bool pressedEvent = false;
@@ -22,9 +23,10 @@ struct ButtonState {
   uint32_t pressedAt = 0;
   uint32_t lastRepeatAt = 0;
 
-  void begin(uint8_t p) {
+  void begin(uint8_t p, uint8_t pressedLevel = LOW) {
     pin = p;
-    pinMode(pin, INPUT_PULLUP);
+    activeLevel = pressedLevel;
+    pinMode(pin, activeLevel == LOW ? INPUT_PULLUP : INPUT);
     stable = digitalRead(pin);
     lastRead = stable;
     pressedEvent = false;
@@ -43,7 +45,7 @@ struct ButtonState {
     }
     if ((now - changedAt) >= DEBOUNCE_MS && nowRead != stable) {
       stable = nowRead;
-      if (stable == LOW) {
+      if (stable == activeLevel) {
         pressedEvent = true;
         pressedAt = now;
         lastRepeatAt = now;
@@ -53,7 +55,7 @@ struct ButtonState {
         lastRepeatAt = 0;
       }
     }
-    if (stable == LOW && pressedAt != 0 &&
+    if (stable == activeLevel && pressedAt != 0 &&
         (now - pressedAt) >= REPEAT_DELAY_MS &&
         (now - lastRepeatAt) >= REPEAT_INTERVAL_MS) {
       repeatEvent = true;

@@ -1,5 +1,7 @@
 # BQ27220 Battery Gauge Example
 
+Before the first build, complete the [Board Manager setup](../../../docs/board-manager.md) and select `esp32_s3_lr1121_oled_1_54_xf` with `idf.py bmgr -b esp32_s3_lr1121_oled_1_54_xf`.
+
 This example shows how to read battery information from the onboard BQ27220 fuel gauge.
 
 The application initializes the battery gauge and prints voltage, current, state of charge, remaining capacity, full charge capacity, and temperature once per second.
@@ -19,7 +21,7 @@ No menuconfig changes are required for the default board configuration.
 The battery gauge is initialized with a 1000 ms update interval:
 
 ```c
-bsp_bat_init(1000);
+board_bat_init(1000);
 ```
 
 ### Build and Flash

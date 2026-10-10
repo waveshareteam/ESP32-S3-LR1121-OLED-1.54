@@ -1,5 +1,7 @@
 # Speaker MP3 Player Example
 
+Before the first build, complete the [Board Manager setup](../../../docs/board-manager.md) and select `esp32_s3_lr1121_oled_1_54_xf` with `idf.py bmgr -b esp32_s3_lr1121_oled_1_54_xf`.
+
 This example shows how to play MP3 files from a microSD card through the onboard speaker output.
 
 The application mounts the SD card, scans `/sdcard/music` for `.mp3` files, starts playback, and uses board buttons for track and volume control.

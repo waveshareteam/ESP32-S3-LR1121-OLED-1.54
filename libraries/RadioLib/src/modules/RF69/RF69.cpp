@@ -660,6 +660,10 @@ int16_t RF69::getFrequencyDeviation(float *freqDev) {
   return(RADIOLIB_ERR_NONE);
 }
 
+int16_t RF69::setOutputPower(int8_t pwr) {
+  return(setOutputPower(pwr, false));
+}
+
 int16_t RF69::setOutputPower(int8_t pwr, bool highPower) {
   if(highPower) {
     RADIOLIB_CHECK_RANGE(pwr, -2, 20, RADIOLIB_ERR_INVALID_OUTPUT_POWER);
@@ -696,6 +700,10 @@ int16_t RF69::setOutputPower(int8_t pwr, bool highPower) {
   }
 
   return(state);
+}
+
+int16_t RF69::setSyncWord(uint8_t* syncWord, size_t len) {
+  return(setSyncWord(static_cast<const uint8_t*>(syncWord), len, 0));
 }
 
 int16_t RF69::setSyncWord(const uint8_t* syncWord, size_t len, uint8_t maxErrBits) {

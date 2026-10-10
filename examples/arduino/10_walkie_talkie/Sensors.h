@@ -14,10 +14,10 @@ extern bool rtcValid;
 extern uint16_t batterySoc;
 extern int16_t batteryCurrentMa;
 extern bool batteryCharging;
+extern bool batteryChargeValid;
 extern bool batteryValid;
 
 bool readRtc();
-bool readBatteryChargeStatus();
 bool readBattery();
 void resetSensorTimers();
 void periodicSensors();

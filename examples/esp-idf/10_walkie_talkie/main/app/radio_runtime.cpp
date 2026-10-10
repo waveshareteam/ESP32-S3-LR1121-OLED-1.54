@@ -8,6 +8,7 @@
 
 #include "app_state.h"
 #include "radio_device.h"
+#include "esp_log.h"
 
 #define RADIO_SYNC_WORD 0x12
 #define RADIO_PREAMBLE_LENGTH 8
@@ -17,21 +18,7 @@
 volatile bool radio_irq_fired = false;
 
 // RF switch pins select the correct LR1121 RF path for RX/TX modes.
-static const uint32_t rfswitch_dio_pins[] = {
-    RADIOLIB_LR11X0_DIO5, RADIOLIB_LR11X0_DIO6,
-    RADIOLIB_NC, RADIOLIB_NC, RADIOLIB_NC
-};
-
-static const Module::RfSwitchMode_t rfswitch_table[] = {
-    { LR11x0::MODE_STBY,  { LOW,  LOW  } },
-    { LR11x0::MODE_RX,    { HIGH, LOW  } },
-    { LR11x0::MODE_TX,    { LOW,  HIGH } },
-    { LR11x0::MODE_TX_HP, { LOW,  HIGH } },
-    { LR11x0::MODE_TX_HF, { LOW,  LOW  } },
-    { LR11x0::MODE_GNSS,  { LOW,  LOW  } },
-    { LR11x0::MODE_WIFI,  { LOW,  LOW  } },
-    END_OF_MODE_TABLE,
-};
+#include "board_radio.h"
 
 static void radio_irq_callback(void)
 {
@@ -90,6 +77,15 @@ int radio_apply_current_config(bool start_receive)
     }
 
     // The main loop completes TX/RX work outside the interrupt context.
+    if (radio_modem == RADIO_MODEM_GFSK) {
+        ESP_LOGI("radio", "GFSK %.1f MHz, bitrate=%.1f kbps, deviation=%.1f kHz, RX BW=%.1f kHz, power=%d dBm",
+                 (double)radio_frequency_mhz, (double)radio_gfsk_bit_rate_kbps,
+                 (double)radio_gfsk_freq_dev_khz, (double)radio_gfsk_rx_bw_khz, (int)radio_tx_power_dbm);
+    } else {
+        ESP_LOGI("radio", "LoRa %.1f MHz, SF=%u, BW=%.1f kHz, CR=4/%u, power=%d dBm",
+                 (double)radio_frequency_mhz, (unsigned)radio_lora_spreading_factor,
+                 (double)radio_lora_bandwidth_khz, (unsigned)radio_lora_coding_rate, (int)radio_tx_power_dbm);
+    }
     radio_restore_irq_action();
     return start_receive ? radio.startReceive() : radio.standby();
 }

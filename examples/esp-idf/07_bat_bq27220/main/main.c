@@ -7,21 +7,21 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "bsp/esp-bsp.h"
+#include "board_support.h"
 
 static const char *TAG = "bat_bq27220";
 
 void app_main(void)
 {
     bsp_bat_info_t bat_info;
-    esp_err_t ret = bsp_bat_init(1000);
+    esp_err_t ret = board_bat_init(1000);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize battery monitor: %s", esp_err_to_name(ret));
         return;
     }
 
     while (1) {
-        ret = bsp_get_bat_info(&bat_info);
+        ret = board_get_bat_info(&bat_info);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to read battery info: %s", esp_err_to_name(ret));
             vTaskDelay(1000 / portTICK_PERIOD_MS);

@@ -5,6 +5,9 @@
  */
 
 #include <lvgl.h>
+#if LVGL_VERSION_MAJOR != 9
+#error "This product requires LVGL_VERSION_MAJOR == 9"
+#endif
 #include <Arduino_GFX_Library.h>
 #include <Wire.h>
 
@@ -59,9 +62,9 @@ void my_disp_flush(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
     }
     // pass the draw buffer to the driver
 
-    gfx->drawBitmap(x1, y1, oled_buffer, x2 + 1, y2 + 1, 1, 0);
+    gfx->drawBitmap(0, 0, oled_buffer, 128, 64, 1, 0);
 
-    lv_disp_flush_ready(disp);
+    lv_display_flush_ready(disp);
 }
 
 void lvgl_oled_demo(void)
@@ -96,7 +99,11 @@ void lvgl_oled_demo(void)
 void setup()
 {
   Serial.begin(115200);
-  Wire.begin(I2C_SDA, I2C_SCL);
+  if (!Wire.begin(I2C_SDA, I2C_SCL)) {
+    Serial.println("I2C initialization failed");
+    while (true) delay(1000);
+  }
+  Wire.setClock(400000);
 
   if (!gfx->begin()) {
     Serial.println("Display begin failed");
@@ -119,8 +126,13 @@ void setup()
   }
 
   disp = lv_display_create(128, 64);
+  if (!disp) {
+    Serial.println("LVGL display allocation failed");
+    while (true) delay(1000);
+  }
+  lv_display_set_color_format(disp, LV_COLOR_FORMAT_I1);
   lv_display_set_flush_cb(disp, my_disp_flush);
-  lv_display_set_buffers(disp, lvgl_buf, NULL, buf_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
+  lv_display_set_buffers(disp, lvgl_buf, NULL, buf_size, LV_DISPLAY_RENDER_MODE_FULL);
 
   /* UI */
   lvgl_oled_demo();
@@ -130,5 +142,5 @@ void setup()
 void loop()
 {
   lv_timer_handler();   // LVGL9
-  yield();
+  delay(5);
 }

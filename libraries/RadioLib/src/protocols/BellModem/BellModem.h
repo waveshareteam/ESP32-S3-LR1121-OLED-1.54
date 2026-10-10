@@ -54,6 +54,7 @@ extern const struct BellModem_t Bell202;
 class BellClient: public AFSKClient, public RadioLibPrint {
   
   public:
+    using RadioLibPrint::write;
     
     /*!
       \brief Whether the modem is replying.

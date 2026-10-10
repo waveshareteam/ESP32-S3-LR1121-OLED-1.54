@@ -1,2 +1,20 @@
 lorawan_secrets.h
 **/lorawan_secrets.h
+
+# Generated/downloaded content and local reference material
+**/build/
+**/build.*/
+**/managed_components/
+**/components/gen_bmgr_codes/
+**/sdkconfig
+**/sdkconfig.old
+**/dependencies.lock
+**/__pycache__/
+**/.pytest_cache/
+**/*.zip
+**/*.tar.gz
+examples/esp-idf/08_oled_ssd1309/ESP32-S3-LR1121-OLED-1.54-*/
+releases/dist/
+releases/downloads/
+.arduino/
+.ci/

@@ -10,19 +10,21 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-#include "bsp_board_extra.h"
+#include "board_extra.h"
 #include "codec2.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/event_groups.h"
 
 #include "app_state.h"
 #include "audio_stream_buffer.hpp"
 
 #define AUDIO_BUFFER_SIZE (160 * 20)
 #define VOLUME_LEVEL 100
-#define GAIN_LEVEL 30
+#define GAIN_LEVEL 24
+#define AUDIO_IO_TIMEOUT_MS 100
 #define TX_START_SKIP_FRAMES 10
 #define TX_SILENCE_LEVEL 50
 #define TX_AGC_TARGET_LEVEL 2400
@@ -41,6 +43,9 @@ static DynamicBuffer<int16_t> iis_write_buffer(AUDIO_BUFFER_SIZE);
 static DynamicBuffer<uint8_t> lora_send_buffer(LORA_TRANSMISSION_DATA_SIZE * 10);
 static DynamicBuffer<uint8_t> lora_receive_buffer(LORA_TRANSMISSION_DATA_SIZE * 10);
 static volatile bool audio_pipeline_suspended = false;
+static EventGroupHandle_t audio_task_state;
+static constexpr EventBits_t CODEC_IDLE = BIT0;
+static constexpr EventBits_t SPEAKER_IDLE = BIT1;
 
 // TX processor removes DC/rumble, gates silence and applies slow AGC before Codec2.
 struct TxAudioProcessor {
@@ -148,6 +153,8 @@ static void codec2_task(void *parameter)
     uint8_t *codec2_compress_buf = (uint8_t *)malloc(codec2_compress_size);
     bool tx_audio_active = false;
     uint8_t tx_skip_frames = 0;
+    uint32_t encoded_frames = 0, read_failures = 0, input_peak = 0;
+    TickType_t last_tx_log = 0;
     TxAudioProcessor tx_processor;
 
     if (!msm_sample_buf || !codec2_buf || !codec2_compress_buf) {
@@ -164,6 +171,7 @@ static void codec2_task(void *parameter)
         if (audio_pipeline_suspended) {
             tx_audio_active = false;
             tx_processor.reset();
+            xEventGroupSetBits(audio_task_state, CODEC_IDLE);
             continue;
         }
 
@@ -173,13 +181,27 @@ static void codec2_task(void *parameter)
                 tx_audio_active = true;
                 tx_skip_frames = TX_START_SKIP_FRAMES;
                 tx_processor.reset();
+                ESP_LOGI(TAG, "PTT capture started: 8000 Hz, mono, 160 samples/frame");
             }
 
             for (uint8_t i = 0; i < msm_sample_frequency; i++) {
+                if (audio_pipeline_suspended || !Lora_Transmission_Mode) break;
                 size_t bytes_read = 0;
-                bsp_extra_i2s_read(msm_sample_buf, pcm_frame_bytes, &bytes_read, portMAX_DELAY);
+                esp_err_t ret = board_extra_i2s_read(msm_sample_buf, pcm_frame_bytes, &bytes_read, AUDIO_IO_TIMEOUT_MS);
 
-                if (bytes_read != pcm_frame_bytes) continue;
+                // Stop the batch if PTT was released during the blocking read.
+                if (audio_pipeline_suspended || !Lora_Transmission_Mode) {
+                    lora_send_buffer.clear();
+                    break;
+                }
+                if (ret != ESP_OK || bytes_read != pcm_frame_bytes) {
+                    if (++read_failures == 1 || read_failures % 10 == 0) {
+                        ESP_LOGW(TAG, "Mic read failed: %s, bytes=%u/%u, failures=%lu",
+                                 esp_err_to_name(ret), (unsigned)bytes_read,
+                                 (unsigned)pcm_frame_bytes, (unsigned long)read_failures);
+                    }
+                    continue;
+                }
 
                 if (tx_skip_frames > 0) {
                     tx_skip_frames--;
@@ -190,8 +212,21 @@ static void codec2_task(void *parameter)
                     continue;
                 }
 
+                for (int j = 0; j < codec2_sample_size; ++j) {
+                    uint32_t peak = abs((int)msm_sample_buf[j]);
+                    if (peak > input_peak) input_peak = peak;
+                }
+
                 codec2_encode(codec2_state, codec2_compress_buf, msm_sample_buf);
                 lora_send_buffer.push(codec2_compress_buf, codec2_compress_size);
+                ++encoded_frames;
+            }
+            if (xTaskGetTickCount() - last_tx_log >= pdMS_TO_TICKS(1000)) {
+                last_tx_log = xTaskGetTickCount();
+                ESP_LOGI(TAG, "TX frames=%lu queued=%uB processed_peak=%lu mic_fail=%lu",
+                         (unsigned long)encoded_frames, (unsigned)lora_send_buffer.size(),
+                         (unsigned long)input_peak, (unsigned long)read_failures);
+                input_peak = 0;
             }
         } else {
             tx_audio_active = false;
@@ -199,7 +234,7 @@ static void codec2_task(void *parameter)
         }
 
         // Decode queued RX frames and hand PCM to the playback task.
-        while (true) {
+        while (!audio_pipeline_suspended && !Lora_Transmission_Mode) {
             uint8_t lora_data_buf[LORA_TRANSMISSION_DATA_SIZE];
 
             if (!lora_receive_buffer.pop(lora_data_buf, codec2_compress_size)) {
@@ -233,6 +268,7 @@ static void max_play_task(void *parameter)
         vTaskDelay(pdMS_TO_TICKS(10));
 
         if (audio_pipeline_suspended) {
+            xEventGroupSetBits(audio_task_state, SPEAKER_IDLE);
             continue;
         }
 
@@ -241,18 +277,26 @@ static void max_play_task(void *parameter)
         }
 
         size_t bytes_written = 0;
-        bsp_extra_i2s_write(iis_data_buf, FRAME_BYTES, &bytes_written, portMAX_DELAY);
+        esp_err_t ret = board_extra_i2s_write(iis_data_buf, FRAME_BYTES, &bytes_written, AUDIO_IO_TIMEOUT_MS);
+        if (ret != ESP_OK || bytes_written != FRAME_BYTES) {
+            ESP_LOGW(TAG, "Speaker write failed: %s, bytes=%u/%u", esp_err_to_name(ret),
+                     (unsigned)bytes_written, (unsigned)FRAME_BYTES);
+        }
     }
 }
 
 void audio_pipeline_start(void)
 {
-    bsp_extra_codec_init();
-    bsp_extra_codec_volume_set(VOLUME_LEVEL, nullptr);
-    bsp_extra_codec_gain_set(GAIN_LEVEL, nullptr);
+    ESP_ERROR_CHECK(board_extra_codec_init());
+    // Codec2 MODE_3200 always encodes 20 ms of 8 kHz mono PCM per 160 samples.
+    ESP_ERROR_CHECK(board_extra_codec_sample_rate_get() == 8000 ? ESP_OK : ESP_ERR_INVALID_STATE);
+    ESP_ERROR_CHECK(board_extra_codec_volume_set(VOLUME_LEVEL, nullptr));
+    ESP_ERROR_CHECK(board_extra_codec_gain_set(GAIN_LEVEL, nullptr));
 
-    xTaskCreate(&codec2_task, "Codec2_Task", 32000, NULL, 6, NULL);
-    xTaskCreate(&max_play_task, "MAX_Play_Task", 30000, NULL, 6, NULL);
+    audio_task_state = xEventGroupCreate();
+    ESP_ERROR_CHECK(audio_task_state ? ESP_OK : ESP_ERR_NO_MEM);
+    ESP_ERROR_CHECK(xTaskCreate(&codec2_task, "Codec2_Task", 32000, NULL, 6, NULL) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
+    ESP_ERROR_CHECK(xTaskCreate(&max_play_task, "MAX_Play_Task", 30000, NULL, 6, NULL) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
 }
 
 // Clear all audio queues when PTT changes state or radio settings are rebuilt.
@@ -265,41 +309,50 @@ void audio_pipeline_clear_all(void)
 
 esp_err_t audio_pipeline_prepare_sleep(void)
 {
+    xEventGroupClearBits(audio_task_state, CODEC_IDLE | SPEAKER_IDLE);
     audio_pipeline_suspended = true;
+    EventBits_t idle = xEventGroupWaitBits(audio_task_state, CODEC_IDLE | SPEAKER_IDLE,
+                                         pdFALSE, pdTRUE, pdMS_TO_TICKS(1000));
+    if ((idle & (CODEC_IDLE | SPEAKER_IDLE)) != (CODEC_IDLE | SPEAKER_IDLE)) {
+        audio_pipeline_suspended = false;
+        xEventGroupClearBits(audio_task_state, CODEC_IDLE | SPEAKER_IDLE);
+        return ESP_ERR_TIMEOUT;
+    }
     audio_pipeline_clear_all();
-    vTaskDelay(pdMS_TO_TICKS(30));
 
-    esp_err_t ret = bsp_extra_codec_mute_set(true);
-    esp_err_t stop_ret = bsp_extra_codec_dev_stop();
+    esp_err_t ret = board_extra_codec_mute_set(true);
+    esp_err_t stop_ret = board_extra_codec_dev_stop();
     if (ret == ESP_OK) {
         ret = stop_ret;
     }
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "Failed to stop codec before sleep: %s", esp_err_to_name(ret));
+        ESP_ERROR_CHECK(audio_pipeline_resume_from_sleep());
     }
     return ret;
 }
 
 esp_err_t audio_pipeline_resume_from_sleep(void)
 {
-    esp_err_t ret = bsp_extra_codec_dev_resume();
-    esp_err_t step_ret = bsp_extra_codec_volume_set(VOLUME_LEVEL, nullptr);
+    esp_err_t ret = board_extra_codec_dev_resume();
+    esp_err_t step_ret = board_extra_codec_volume_set(VOLUME_LEVEL, nullptr);
     if (ret == ESP_OK) {
         ret = step_ret;
     }
 
-    step_ret = bsp_extra_codec_gain_set(GAIN_LEVEL, nullptr);
+    step_ret = board_extra_codec_gain_set(GAIN_LEVEL, nullptr);
     if (ret == ESP_OK) {
         ret = step_ret;
     }
 
-    step_ret = bsp_extra_codec_mute_set(false);
+    step_ret = board_extra_codec_mute_set(false);
     if (ret == ESP_OK) {
         ret = step_ret;
     }
 
     audio_pipeline_clear_all();
-    audio_pipeline_suspended = false;
+    xEventGroupClearBits(audio_task_state, CODEC_IDLE | SPEAKER_IDLE);
+    audio_pipeline_suspended = (ret != ESP_OK);
 
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "Failed to resume codec after sleep: %s", esp_err_to_name(ret));

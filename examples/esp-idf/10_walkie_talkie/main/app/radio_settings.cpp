@@ -63,7 +63,7 @@ const uint8_t GFSK_DEV_OPTION_COUNT = sizeof(gfsk_dev_values) / sizeof(gfsk_dev_
 const uint8_t GFSK_RX_OPTION_COUNT = sizeof(gfsk_rx_bw_values) / sizeof(gfsk_rx_bw_values[0]);
 const uint8_t PWR_OPTION_COUNT = sizeof(tx_power_values) / sizeof(tx_power_values[0]);
 const uint8_t CR_OPTION_COUNT = 8;
-static const uint8_t RADIO_HF_FREQ_STEP_MHZ = 2;
+static const uint8_t RADIO_HF_FREQ_STEP_MHZ = 1;
 static const uint8_t RADIO_LF_FREQ_STEP_MHZ = 1;
 static const uint16_t RADIO_HF_MIN_FREQ_MHZ = 862;
 static const uint16_t RADIO_HF_MAX_FREQ_MHZ = 923;
@@ -118,9 +118,12 @@ const char RADIO_BAND_OPTIONS[] =
     "LF";
 
 static const char RADIO_HF_FREQ_OPTIONS[] =
-    "862\n864\n866\n868\n870\n872\n874\n876\n878\n880\n"
-    "882\n884\n886\n888\n890\n892\n894\n896\n898\n900\n"
-    "902\n904\n906\n908\n910\n912\n914\n916\n918\n920\n"
+    "862\n863\n864\n865\n866\n867\n868\n869\n870\n871\n"
+    "872\n873\n874\n875\n876\n877\n878\n879\n880\n881\n"
+    "882\n883\n884\n885\n886\n887\n888\n889\n890\n891\n"
+    "892\n893\n894\n895\n896\n897\n898\n899\n900\n901\n"
+    "902\n903\n904\n905\n906\n907\n908\n909\n910\n911\n"
+    "912\n913\n914\n915\n916\n917\n918\n919\n920\n921\n"
     "922\n923";
 
 static const char RADIO_LF_FREQ_OPTIONS[] =

@@ -8,6 +8,13 @@
 
 #include <Arduino.h>
 
+struct RadioSettingsSnapshot {
+  uint8_t mode, band, sf, bw, cr, gfskBr, gfskDev, gfskRx, power;
+  uint16_t frequencyMhz;
+};
+
+RadioSettingsSnapshot captureRadioSettings();
+bool saveRadioSettings(const RadioSettingsSnapshot &settings);
 void loadRadioSettings();
 uint8_t optionCount(uint8_t page);
 uint8_t currentSettingIndex(uint8_t page);

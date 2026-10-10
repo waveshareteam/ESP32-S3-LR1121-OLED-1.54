@@ -789,7 +789,10 @@ class RF69: public PhysicalLayer {
       Defaults to false (models without high power port - RF69C/CW).
       \returns \ref status_codes
     */
-    int16_t setOutputPower(int8_t pwr, bool highPower = false);
+    int16_t setOutputPower(int8_t pwr, bool highPower);
+
+    /*! \brief Sets output power using the default low-power port. */
+    int16_t setOutputPower(int8_t pwr) override;
 
     /*!
       \brief Sets sync word. Up to 8 bytes can be set as sync word.
@@ -798,6 +801,9 @@ class RF69: public PhysicalLayer {
       \param maxErrBits Maximum allowed number of bit errors in received sync word. Defaults to 0.
     */
     int16_t setSyncWord(const uint8_t* syncWord, size_t len, uint8_t maxErrBits = 0);
+
+    /*! \brief Sets sync word with zero allowed bit errors via PhysicalLayer. */
+    int16_t setSyncWord(uint8_t* syncWord, size_t len) override;
 
     /*!
       \brief Sets preamble length.

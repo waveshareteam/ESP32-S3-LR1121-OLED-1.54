@@ -54,6 +54,7 @@ struct ButtonState {
   static constexpr uint32_t REPEAT_INTERVAL_MS = 180;
 
   uint8_t pin = 0;
+  uint8_t activeLevel = LOW;
   bool stable = HIGH;
   bool lastRead = HIGH;
   bool clickEvent = false;
@@ -63,9 +64,10 @@ struct ButtonState {
   uint32_t pressedAt = 0;
   uint32_t lastRepeatAt = 0;
 
-  void begin(uint8_t p) {
+  void begin(uint8_t p, uint8_t pressedLevel = LOW) {
     pin = p;
-    pinMode(pin, INPUT_PULLUP);
+    activeLevel = pressedLevel;
+    pinMode(pin, activeLevel == LOW ? INPUT_PULLUP : INPUT);
     stable = digitalRead(pin);
     lastRead = stable;
     changedAt = millis();
@@ -82,7 +84,7 @@ struct ButtonState {
 
     if ((now - changedAt) >= DEBOUNCE_MS && nowRead != stable) {
       stable = nowRead;
-      if (stable == LOW) {
+      if (stable == activeLevel) {
         pressedAt = now;
         lastRepeatAt = now;
         longActive = false;
@@ -97,7 +99,7 @@ struct ButtonState {
       }
     }
 
-    if (stable == LOW && pressedAt != 0 &&
+    if (stable == activeLevel && pressedAt != 0 &&
         (now - pressedAt) >= REPEAT_DELAY_MS &&
         (now - lastRepeatAt) >= REPEAT_INTERVAL_MS) {
       repeatEvent = true;
@@ -279,7 +281,7 @@ static void togglePause() {
 
 static void initButtons() {
   btnBoot.begin(PIN_KEY_BOOT);
-  btnPwr.begin(PIN_KEY_PWR);
+  btnPwr.begin(PIN_KEY_PWR, HIGH);  // Q6 inverts the power key.
   btnMenu.begin(PIN_KEY_MENU);
   btnPtt.begin(PIN_KEY_PTT);
 

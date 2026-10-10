@@ -13,7 +13,7 @@
 
 bool Es8311Codec::begin(uint32_t sampleRate, uint8_t volume) {
   if (!probe(ES8311_ADDR)) {
-    Serial.println("[ES8311] not found");
+    WALKIE_LOG_PRINTLN("[ES8311] not found");
     return false;
   }
 
@@ -169,7 +169,7 @@ uint8_t Es8311Codec::readReg(uint8_t reg) {
 
 bool Es7210Adc::begin() {
   if (!probe(ES7210_ADDR)) {
-    Serial.println("[ES7210] not found");
+    WALKIE_LOG_PRINTLN("[ES7210] not found");
     return false;
   }
 
@@ -195,7 +195,7 @@ bool Es7210Adc::begin() {
   ok &= configI2SFormat();
   offReg_ = readReg(0x01);
   ok &= start();
-  Serial.printf("[ES7210] regs 00=%02X 01=%02X 02=%02X 08=%02X 11=%02X 12=%02X 43=%02X 44=%02X 45=%02X 46=%02X\n",
+  WALKIE_LOG_PRINTF("[ES7210] regs 00=%02X 01=%02X 02=%02X 08=%02X 11=%02X 12=%02X 43=%02X 44=%02X 45=%02X 46=%02X\n",
                 readReg(0x00),
                 readReg(0x01),
                 readReg(0x02),

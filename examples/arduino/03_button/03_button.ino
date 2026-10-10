@@ -11,12 +11,13 @@
 #define GPIO5_IO_NUM  5
 #define GPIO6_IO_NUM  6
 
-#define BUTTON_ACTIVE_LEVEL true
+#define BUTTON_ACTIVE_LOW true
 
-OneButton button1(GPIO0_IO_NUM, BUTTON_ACTIVE_LEVEL);
-OneButton button2(GPIO5_IO_NUM, BUTTON_ACTIVE_LEVEL);
-OneButton button3(GPIO4_IO_NUM, BUTTON_ACTIVE_LEVEL);
-OneButton button4(GPIO6_IO_NUM, BUTTON_ACTIVE_LEVEL);
+OneButton button1(GPIO0_IO_NUM, BUTTON_ACTIVE_LOW);
+OneButton button2(GPIO5_IO_NUM, BUTTON_ACTIVE_LOW);
+// Q6 inverts the power key: pressed is HIGH; no internal pull-up is needed.
+OneButton button3(GPIO4_IO_NUM, BUTTON_ACTIVE_LOW);
+OneButton button4(GPIO6_IO_NUM, BUTTON_ACTIVE_LOW);
 
 static const uint32_t SERIAL_WAIT_TIMEOUT_MS = 3000;
 static const uint32_t BUTTON_POLL_INTERVAL_MS = 10;

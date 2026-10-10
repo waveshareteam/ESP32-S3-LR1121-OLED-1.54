@@ -90,6 +90,8 @@
 
 class LRxxxx: public PhysicalLayer {
   public:
+    using PhysicalLayer::getTimeOnAir;
+
     explicit LRxxxx(Module* mod);
 
     /*!

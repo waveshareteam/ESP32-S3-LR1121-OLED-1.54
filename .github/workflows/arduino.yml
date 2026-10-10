@@ -1,0 +1,69 @@
+name: arduino examples
+'on':
+  push:
+    paths: &id001
+    - examples/arduino/**/*.c
+    - examples/arduino/**/*.cpp
+    - examples/arduino/**/*.h
+    - examples/arduino/**/*.hpp
+    - examples/arduino/**/*.ino
+    - examples/arduino/**/CMakeLists.txt
+    - examples/arduino/**/Kconfig*
+    - examples/arduino/**/sdkconfig.defaults
+    - examples/arduino/**/*.yml
+    - examples/arduino/**/*.yaml
+    - examples/arduino/**/*.csv
+    - libraries/**/src/**
+    - libraries/**/library.properties
+    - config/arduino/**
+    - config/frameworks.json
+    - scripts/**
+    - releases/*.py
+    - .github/workflows/arduino.yml
+  pull_request:
+    paths: *id001
+  workflow_dispatch:
+    inputs:
+      example:
+        description: all, example name, or repository-relative directory
+        default: all
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+    - uses: actions/checkout@v4
+    - id: matrix
+      env:
+        SELECTOR: ${{ inputs.example || 'all' }}
+      run: 'python3 scripts/discover_examples.py --framework arduino --selector "$SELECTOR" > matrix.json
+
+        echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"'
+  build:
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: arduino/setup-arduino-cli@v2
+    - name: Install pinned core and build
+      env:
+        EXAMPLE: ${{ matrix.name }}
+      run: python3 scripts/build_arduino.py "$EXAMPLE" --prepare
+    - name: Package source firmware
+      env:
+        EXAMPLE: ${{ matrix.name }}
+        VERSION: ${{ matrix.version }}
+      run: python3 releases/package_firmware.py --framework arduino --selector "$EXAMPLE" --version "$VERSION"
+    - uses: actions/upload-artifact@v4
+      with:
+        name: arduino-${{ matrix.name }}-${{ matrix.version }}-${{ matrix.target }}
+        path: releases/dist/*.zip
+        if-no-files-found: error

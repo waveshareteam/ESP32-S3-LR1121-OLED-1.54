@@ -1,0 +1,7 @@
+# Capabilities of this example's local source files.
+config WS_BOARD_DISPLAY
+    bool
+    default n
+config WS_BOARD_AUDIO
+    bool
+    default y

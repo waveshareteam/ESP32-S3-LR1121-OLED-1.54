@@ -6,7 +6,21 @@
 
 #pragma once
 
+// Serial debug logging: 0 = off (default), 1 = on, at 115200 baud.
+#ifndef ENABLE_DEBUG_LOG
+#define ENABLE_DEBUG_LOG 0
+#endif
+
 #include <Arduino.h>
+
+// Disabled logs do not format strings or evaluate their arguments.
+#if ENABLE_DEBUG_LOG
+#define WALKIE_LOG_PRINTF(...) do { Serial.printf(__VA_ARGS__); } while (0)
+#define WALKIE_LOG_PRINTLN(...) do { Serial.println(__VA_ARGS__); } while (0)
+#else
+#define WALKIE_LOG_PRINTF(...) do {} while (0)
+#define WALKIE_LOG_PRINTLN(...) do {} while (0)
+#endif
 
 // Board pins, copied from the IDF BSP.
 static constexpr int PIN_I2C_SDA = 13;
@@ -32,7 +46,14 @@ static constexpr int PIN_KEY_PWR = 4;
 static constexpr int PIN_KEY_MENU = 5;
 static constexpr int PIN_KEY_PTT = 6;
 
-static constexpr bool BATTERY_CHARGE_DEBUG_LOG = false;
+// Match the current IDF/button configuration; UI and wake detection must agree.
+static constexpr uint8_t POWER_BUTTON_ACTIVE_LEVEL = LOW;
+static constexpr uint32_t LOW_POWER_IDLE_TIMEOUT_MS = 30000;
+
+static constexpr bool BATTERY_CHARGE_DEBUG_LOG = ENABLE_DEBUG_LOG;
+static constexpr bool VOICE_DEBUG_LOG = ENABLE_DEBUG_LOG;
+// Match the capacity printed on the installed battery, not a gauge default.
+static constexpr uint16_t BATTERY_DESIGN_CAPACITY_MAH = 1000;
 
 static constexpr uint8_t OLED_ADDR = 0x3C;
 static constexpr uint8_t RTC_ADDR = 0x51;
@@ -58,24 +79,18 @@ static constexpr size_t AUDIO_BUFFER_SIZE = 160 * 20;
 static constexpr size_t LORA_TRANSMISSION_DATA_SIZE = 240;
 
 static constexpr uint8_t TX_START_SKIP_FRAMES = 10;
-static constexpr int32_t TX_SILENCE_LEVEL = 450;
-static constexpr int32_t TX_NOISE_FLOOR_INITIAL = 120;
-static constexpr int32_t TX_NOISE_OPEN_MARGIN = 450;
-static constexpr int32_t TX_NOISE_CLOSE_MARGIN = 250;
-static constexpr uint8_t TX_VOICE_HANGOVER_FRAMES = 6;
-static constexpr int32_t TX_AGC_TARGET_LEVEL = 1800;
+// Match the working IDF audio pipeline. Silence remains part of the Codec2
+// stream so low microphone levels cannot stop RF packet assembly.
+static constexpr int32_t TX_SILENCE_LEVEL = 50;
+static constexpr int32_t TX_AGC_TARGET_LEVEL = 2400;
 static constexpr int32_t TX_AGC_MIN_GAIN_Q8 = 192;
-static constexpr int32_t TX_AGC_MAX_GAIN_Q8 = 384;
+static constexpr int32_t TX_AGC_MAX_GAIN_Q8 = 4 * 256;
 static constexpr int32_t TX_HIGHPASS_COEFF_Q15 = 32604;
-static constexpr int32_t TX_SOFT_KNEE = 12000;
-static constexpr int32_t TX_PEAK_LIMIT = 20000;
+static constexpr int32_t TX_PEAK_LIMIT = 28000;
 static constexpr int32_t PCM_CLIP_LEVEL = 30000;
-static constexpr int32_t PLAYBACK_GAIN_NUM = 3;
-static constexpr int32_t PLAYBACK_GAIN_DEN = 4;
-static constexpr int32_t PLAYBACK_NOISE_GATE_LEVEL = 180;
-static constexpr uint8_t PLAYBACK_NOISE_GATE_HANGOVER_FRAMES = 2;
-static constexpr int32_t PLAYBACK_SOFT_KNEE = 10000;
-static constexpr int32_t PLAYBACK_PEAK_LIMIT = 22000;
+static constexpr int32_t PLAYBACK_GAIN_NUM = 4;
+static constexpr int32_t PLAYBACK_GAIN_DEN = 5;
+static constexpr int32_t PLAYBACK_PEAK_LIMIT = 26000;
 
 static constexpr uint8_t RADIO_MODEM_GFSK = 0;
 static constexpr uint8_t RADIO_MODEM_LORA = 1;

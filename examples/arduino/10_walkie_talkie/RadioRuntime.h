@@ -11,10 +11,12 @@
 void initRadioSpi();
 void requestRadioReconfigure();
 int16_t applyRadioConfig(bool startReceive);
+bool startRadioConfigTask();
 void handleRadioReconfigure();
 void handlePtt();
 void handleRadioTransmission();
 void handleRadioIrq();
+void logRadioDiagnostics();
 bool radioRuntimeIsBusy();
 bool isRadioIrqAsserted();
 void clearRadioIrqPending();
