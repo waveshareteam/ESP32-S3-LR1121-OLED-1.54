@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include <lv_conf.h>
 #include <lvgl.h>
 #if LVGL_VERSION_MAJOR != 9
 #error "This product requires LVGL_VERSION_MAJOR == 9"

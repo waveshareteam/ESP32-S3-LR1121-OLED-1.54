@@ -1,0 +1,66 @@
+name: Firmware Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: firmware-release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify stable tag and source commit
+        env:
+          TAG: ${{ github.ref_name }}
+          SOURCE_SHA: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: python3 releases/release_firmware.py verify-tag --tag "$TAG" --sha "$SOURCE_SHA" --default-branch "$DEFAULT_BRANCH"
+  static:
+    needs: verify
+    uses: ./.github/workflows/static.yml
+  esp-idf:
+    needs: [verify, static]
+    uses: ./.github/workflows/esp-idf.yml
+    with:
+      example: all
+  arduino:
+    needs: [verify, static]
+    uses: ./.github/workflows/arduino.yml
+    with:
+      example: all
+  publish:
+    needs: [verify, static, esp-idf, arduino]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: esp-idf-*
+          path: releases/downloads/esp-idf
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: arduino-*
+          path: releases/downloads/arduino
+      - name: Validate exact firmware matrix
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: python3 releases/release_firmware.py validate --sha "$SOURCE_SHA"
+      - name: Upload draft, verify remote hashes and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          SOURCE_SHA: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: python3 releases/release_firmware.py publish --repo "$REPOSITORY" --tag "$TAG" --sha "$SOURCE_SHA" --default-branch "$DEFAULT_BRANCH"

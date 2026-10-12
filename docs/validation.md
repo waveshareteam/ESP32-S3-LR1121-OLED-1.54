@@ -1,14 +1,26 @@
 # Validation boundary and inventory
 
-Validation covers static checks, Board Manager generation, CMake configuration, compiler syntax checks and targeted optimized code generation to temporary assembly files; no complete firmware compilation, linking, flashing, serial-port access, RF transmission or hardware test was performed. Framework and component metadata establish target/API intent, not successful builds. CI build workflows have been added but have not been executed as part of this change.
+Validation covers static checks, Board Manager generation, CMake configuration, compiler syntax checks and targeted optimized code generation to temporary assembly files; no complete firmware compilation, linking, flashing, serial-port access, RF transmission or hardware test was performed. Framework and component metadata establish target/API intent, not successful builds. Historical local checks below did not run full firmware builds. GitHub Actions results and the subsequent CI fixes are recorded separately below.
 
 `libraries/lvgl` is intentionally retained for Arduino. Repository validation accepts this dependency; ESP-IDF display projects still require managed LVGL in their manifests. Earlier failure reports below about an offline LVGL tree describe the former validation rule, which has been removed. The library's existing edits and whitespace findings are outside this cleanup's scope.
+
+## CI and release repair (2026-10-12)
+
+GitHub `main` at `a0bf739` matched the GitLab source. The first push ran Arduino CI: ten builds and packages succeeded, while `08_oled_ssd1309` failed during library discovery with `lv_conf.h: No such file or directory`. The ESP-IDF workflow was rejected before any build because job-level `env` used the unavailable `runner` expression context. Static tests failed on the two known missing-board-YAML accesses.
+
+The OLED configuration is now an explicit Arduino library; the sketch includes it before LVGL. The bundled LVGL remains unchanged and the redundant Library Manager download is removed. Local Arduino CLI preprocessing passed using the installed 3.3.11 core; this is an include-discovery check, not a full build on the pinned CI core 3.3.12. ESP-IDF sets its tool directory in a step using `RUNNER_TEMP` and `GITHUB_ENV`. Actionlint 1.7.12 validates all four workflows and also runs as an independent CI job. External Actions are pinned by commit, with Dependabot updates enabled.
+
+Stable version tags now call the same build workflows and require all 47 expected source archives. Packaging adds deterministic metadata, original IDF segments and a combined image, checksums and flash helpers. Independent validation rejects incomplete/duplicate matrices, stale commits, unsafe ZIP members, bad hashes, wrong targets and inconsistent combined images. Publication uploads to a draft, verifies remote asset digests and refuses to overwrite public Releases. No release tag or Release was created for this repair.
+
+The full local suite has 33 tests: 31 pass and the same two audio tests fail because their board YAML is absent. CMake host tests run with an installed CMake tool. New release tests cover corrupted archives, image layout, matrix integrity, remote tag changes and publication refusal. Repackaging and independent validation also passed with the real Arduino 10 merged image downloaded from the initial GitHub run (16,777,216 bytes; the canonical Arduino padding is retained). Source inventory remains 12 IDF projects and 11 Arduino sketches. Public-content and maintained-diff checks pass.
+
+The upstream board pack was rechecked: registry 0.1.1 and upstream `37f2df77734b2f894c0935d9d2cf57ddf23e1079` still do not contain this product. The 11 deleted board directories have not been restored. The two tests and repository validator continue to fail explicitly, and the new Release gate cannot publish until board publication and generator/check integration are complete. These failures are not waived or converted to skips. Full local firmware builds, flashing and hardware tests were not performed.
 
 ## Current source synchronization status
 
 On 2026-10-10, all 11 local `boards` directories under `examples/esp-idf/` were removed by request, pending a product-profile contribution to `waveshare_boards`. The factory source retains its board YAML. Registry version 0.1.1 and upstream revision `37f2df77734b2f894c0935d9d2cf57ddf23e1079` do not yet include this product. Fresh example builds and the generator/check migration remain pending; see [Board Manager setup](board-manager.md#pending-board-integration).
 
-The current checkout passes 18 of 20 host tests. Two audio tests and repository validation fail because they require the deleted YAML. The public-content scan passes, and discovery still finds 12 IDF source projects and 11 Arduino sketches. An isolated diagnostic copy supplied with the previous YAML passes all 20 tests and validation of all 23 entries; this isolates the known missing-board-data failure but does not establish success for the current checkout. No firmware build or hardware test was run for this synchronization.
+At that synchronization, the checkout passed 18 of 20 host tests. Two audio tests and repository validation fail because they require the deleted YAML. The public-content scan passes, and discovery still finds 12 IDF source projects and 11 Arduino sketches. An isolated diagnostic copy supplied with the previous YAML passes all 20 tests and validation of all 23 entries; this isolates the known missing-board-data failure but does not establish success for the current checkout. No firmware build or hardware test was run for this synchronization.
 
 The successful generation and compiler checks recorded below occurred before the board-data removal. They do not prove that a fresh checkout of the current source can build. The 11 example board directories remain absent; no generated components, build output or SDK configurations are part of the synchronized source.
 
@@ -157,7 +169,7 @@ A separate copy of the project passed IDF 6.2 configuration. The generated compi
 
 ## CI behavior
 
-IDF has 36 jobs: 24 stable builds (12 projects × two stable versions) and 12 separately labeled builds against the pinned 6.2 development revision. Arduino has 11. Manual dispatch accepts `all`, a name or a path. Build workflows trigger for source/config/library/build-tool changes; documentation-only changes use the static workflow. Source artifacts are packaged only after successful builds, with version/name/target-specific artifact names. There is no tag-triggered Release publication workflow.
+IDF has 36 jobs: 24 stable builds (12 projects × two stable versions) and 12 separately labeled builds against the pinned 6.2 development revision. Arduino has 11. Manual dispatch accepts `all`, a name or a path. Build workflows trigger for source/config/library/build-tool changes; documentation-only changes use the static workflow. Source artifacts are packaged only after successful builds, with version/name/target-specific artifact names. The later CI repair adds a separate tag-triggered Release gate using these same matrices.
 
 ## Outstanding acceptance
 

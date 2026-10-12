@@ -73,9 +73,9 @@ First-party sketches live directly under `examples/arduino/`, and each directory
 
 The workflows discover projects and accept `all`, an example name or a repository-relative path for manual runs. The configured matrix contains **36 ESP-IDF builds**: 24 across two stable versions and 12 against the pinned 6.2 development revision, plus **11 Arduino builds**. The development jobs are labeled separately; see [ESP-IDF 6.2 Compatibility](docs/idf-6.2.md).
 
-Each successful source build is packaged as a flashable archive with a manifest, binary hashes, flash arguments and Windows/POSIX flash helpers. IDF packages preserve the original binary segments and offsets; Arduino packages use the core's merged export. Workflows upload downloadable artifacts without automatically publishing Releases.
+Successful source builds produce flashable archives with a manifest, checksums, flash arguments and Windows/POSIX helpers. IDF packages contain original segments and a combined image; Arduino packages use the core's merged export. Branch builds upload Actions artifacts. A stable `vMAJOR.MINOR.PATCH` tag starts the Release workflow, which requires all checks and all 47 firmware archives before publishing. See [the release procedure](releases/README.md).
 
-The current checkout passes 18 of 20 host tests; two tests and repository validation require the removed board YAML and currently fail. Earlier compiler checks were performed before that removal. The build workflows have not yet been run for this state. See [CI and Validation](docs/validation.md) and [Source Firmware Artifacts](releases/README.md) for details.
+The board-definition gap still blocks two audio tests, repository validation and complete firmware Releases. The initial GitHub run produced 10 Arduino artifacts; the OLED header-discovery failure and the ESP-IDF workflow-expression error are fixed in this revision. Those fixes require a fresh CI run; they do not establish complete IDF build success. See [CI and Validation](docs/validation.md) and [Source Firmware Artifacts](releases/README.md) for details.
 
 ## Repository Layout
 

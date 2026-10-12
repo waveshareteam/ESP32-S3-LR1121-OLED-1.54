@@ -1,6 +1,7 @@
 name: esp-idf examples
 'on':
   push:
+    branches: ['**']
     paths:
     - examples/esp-idf/**/*.c
     - examples/esp-idf/**/*.cpp
@@ -73,16 +74,22 @@ name: esp-idf examples
         default: all
         required: true
         type: string
+  workflow_call:
+    inputs:
+      example:
+        default: all
+        required: false
+        type: string
 permissions:
   contents: read
 jobs:
   discover:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       development_matrix: ${{ steps.matrix.outputs.development_matrix }}
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
     - id: matrix
       env:
         SELECTOR: ${{ inputs.example || 'all' }}
@@ -93,14 +100,14 @@ jobs:
         echo "development_matrix=$(cat development-matrix.json)" >> "$GITHUB_OUTPUT"
   build:
     needs: discover
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
     - name: Build selected ESP32-S3 project
-      uses: espressif/esp-idf-ci-action@v1
+      uses: espressif/esp-idf-ci-action@9d38657f3d789ca759b2b37aaf5ceffbc42c4f0d # v1
       with:
         esp_idf_version: ${{ matrix.version }}
         target: ${{ matrix.target }}
@@ -116,7 +123,7 @@ jobs:
         EXAMPLE: ${{ matrix.name }}
         VERSION: ${{ matrix.version }}
       run: python3 releases/package_firmware.py --framework esp-idf --selector "$EXAMPLE" --version "$VERSION"
-    - uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: esp-idf-${{ matrix.name }}-${{ matrix.version }}-${{ matrix.target }}
         path: releases/dist/*.zip
@@ -128,19 +135,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.discover.outputs.development_matrix) }}
-    env:
-      IDF_TOOLS_PATH: ${{ runner.temp }}/idf62-tools
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+    - name: Set isolated toolchain directory
+      run: echo "IDF_TOOLS_PATH=$RUNNER_TEMP/idf62-tools" >> "$GITHUB_ENV"
     - name: Checkout pinned ESP-IDF 6.2 development source
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         repository: espressif/esp-idf
         ref: ${{ matrix.ref }}
         path: .ci/esp-idf
         submodules: recursive
         persist-credentials: false
-    - uses: actions/setup-python@v5
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
       with:
         python-version: '3.12'
     - name: Install ESP-IDF host dependencies
@@ -167,7 +174,7 @@ jobs:
         EXAMPLE: ${{ matrix.name }}
         VERSION: ${{ matrix.version }}
       run: python3 releases/package_firmware.py --framework esp-idf --selector "$EXAMPLE" --version "$VERSION"
-    - uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: esp-idf-${{ matrix.name }}-${{ matrix.version }}-${{ matrix.target }}
         path: releases/dist/*.zip

@@ -1,6 +1,7 @@
 name: arduino examples
 'on':
   push:
+    branches: ['**']
     paths: &id001
     - examples/arduino/**/*.c
     - examples/arduino/**/*.cpp
@@ -29,15 +30,21 @@ name: arduino examples
         default: all
         required: true
         type: string
+  workflow_call:
+    inputs:
+      example:
+        default: all
+        required: false
+        type: string
 permissions:
   contents: read
 jobs:
   discover:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
     - id: matrix
       env:
         SELECTOR: ${{ inputs.example || 'all' }}
@@ -46,13 +53,13 @@ jobs:
         echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"'
   build:
     needs: discover
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
     steps:
-    - uses: actions/checkout@v4
-    - uses: arduino/setup-arduino-cli@v2
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+    - uses: arduino/setup-arduino-cli@81d310742121c928ea9c8bbd407b4217b432ae02 # v2
     - name: Install pinned core and build
       env:
         EXAMPLE: ${{ matrix.name }}
@@ -62,7 +69,7 @@ jobs:
         EXAMPLE: ${{ matrix.name }}
         VERSION: ${{ matrix.version }}
       run: python3 releases/package_firmware.py --framework arduino --selector "$EXAMPLE" --version "$VERSION"
-    - uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: arduino-${{ matrix.name }}-${{ matrix.version }}-${{ matrix.target }}
         path: releases/dist/*.zip

@@ -10,12 +10,19 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
 
+def firmware(body=b"application"):
+    header = bytearray(24)
+    header[0] = 0xE9
+    header[12] = 9
+    return bytes(header) + body
+
+
 class PackagingTests(unittest.TestCase):
     def test_idf_offsets_and_flashable_archive(self):
         with tempfile.TemporaryDirectory() as td:
             build = Path(td)
-            (build / "boot.bin").write_bytes(b"boot")
-            (build / "app.bin").write_bytes(b"application")
+            (build / "boot.bin").write_bytes(firmware(b"boot"))
+            (build / "app.bin").write_bytes(firmware())
             (build / "flasher_args.json").write_text(json.dumps({
                 "flash_files": {"0x0": "boot.bin", "0x10000": "app.bin"},
                 "flash_settings": {"flash_mode": "dio", "flash_size": "16MB"}}))
@@ -24,10 +31,10 @@ class PackagingTests(unittest.TestCase):
             with zipfile.ZipFile(archive) as z:
                 manifest = json.loads(z.read("manifest.json"))
                 self.assertEqual([x["offset"] for x in manifest["files"]], ["0x0", "0x10000"])
-                self.assertEqual(z.read("bin/app.bin"), b"application")
+                self.assertEqual(z.read("bin/app.bin"), firmware())
                 self.assertIn("flash.bat", z.namelist())
                 self.assertIn("flash.sh", z.namelist())
-                self.assertIn(b"--flash-size\n16MB", z.read("flash_args"))
+                self.assertIn(b"--flash-size\n16MB", z.read("flash_args.txt"))
 
     def test_arduino_merged_export(self):
         with tempfile.TemporaryDirectory() as td:
@@ -40,8 +47,9 @@ class PackagingTests(unittest.TestCase):
     def test_development_archive_records_framework_revision(self):
         with tempfile.TemporaryDirectory() as td:
             build = Path(td)
-            (build / "app.bin").write_bytes(b"development application")
-            (build / "flasher_args.json").write_text(json.dumps({"flash_files": {"0x10000": "app.bin"}}))
+            (build / "app.bin").write_bytes(firmware(b"development application"))
+            (build / "boot.bin").write_bytes(firmware(b"boot"))
+            (build / "flasher_args.json").write_text(json.dumps({"flash_files": {"0x0": "boot.bin", "0x10000": "app.bin"}}))
             example = {"name": "01_demo", "path": "examples/esp-idf/01_demo", "target": "esp32s3"}
             revision = "b" * 40
             archive = module.package("esp-idf", example, "v6.2-dev.bbbbbbbb", build,

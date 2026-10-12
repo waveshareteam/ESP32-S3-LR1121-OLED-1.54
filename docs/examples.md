@@ -52,7 +52,7 @@ python3 scripts/build_arduino.py 08_oled_ssd1309 --prepare
 python3 scripts/build_arduino.py all
 ```
 
-The helper installs Arduino-ESP32 3.3.12 and LVGL 9.5.0 under ignored `.arduino/`, uses the preserved product libraries, and supplies `config/arduino/lv_conf.h` for both C and C++ compilation. The exact FQBN is in `config/frameworks.json`: ESP32-S3 Dev Module, 16 MB Flash, octal PSRAM, a 16 MB partition layout and USB Serial/JTAG CDC.
+The helper installs Arduino-ESP32 3.3.12 under ignored `.arduino/` and uses the preserved product libraries, including LVGL 9.5.0. For the OLED sketch it registers `config/arduino/` as an Arduino configuration library, so `lv_conf.h` is available during dependency discovery as well as C/C++ compilation. A second LVGL copy is not downloaded. When using Arduino IDE, install `config/arduino/` as the Product LVGL Configuration library alongside the bundled libraries. `--preprocess` resolves includes without compiling firmware. The exact FQBN is in `config/frameworks.json`: ESP32-S3 Dev Module, 16 MB Flash, octal PSRAM, a 16 MB partition layout and USB Serial/JTAG CDC.
 
 `libraries/lvgl` is also retained as a bundled Arduino dependency and is included through the helper's `--libraries` path. It is not a build leftover. ESP-IDF display examples resolve their own managed LVGL dependency independently.
 
