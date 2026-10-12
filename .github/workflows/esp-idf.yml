@@ -89,7 +89,7 @@ jobs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       development_matrix: ${{ steps.matrix.outputs.development_matrix }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - id: matrix
       env:
         SELECTOR: ${{ inputs.example || 'all' }}
@@ -105,7 +105,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - name: Build selected ESP32-S3 project
       uses: espressif/esp-idf-ci-action@9d38657f3d789ca759b2b37aaf5ceffbc42c4f0d # v1
       with:
@@ -136,11 +136,11 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.discover.outputs.development_matrix) }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - name: Set isolated toolchain directory
       run: echo "IDF_TOOLS_PATH=$RUNNER_TEMP/idf62-tools" >> "$GITHUB_ENV"
     - name: Checkout pinned ESP-IDF 6.2 development source
-      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         repository: espressif/esp-idf
         ref: ${{ matrix.ref }}
