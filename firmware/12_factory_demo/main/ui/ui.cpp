@@ -115,6 +115,11 @@ static void style_roller_selected(lv_obj_t *roller, lv_style_selector_t selector
     lv_obj_set_style_outline_width(roller, 0, selector);
 }
 
+static lv_style_selector_t ui_part_state(lv_part_t part, lv_state_t state = static_cast<lv_state_t>(0))
+{
+    return static_cast<lv_style_selector_t>(part) | static_cast<lv_style_selector_t>(state);
+}
+
 static void style_roller(lv_obj_t *roller)
 {
     lv_obj_remove_style_all(roller);
@@ -125,10 +130,10 @@ static void style_roller(lv_obj_t *roller)
     lv_obj_set_style_text_line_space(roller, 0, 0);
     lv_obj_set_style_anim_duration(roller, 200, 0);
     lv_obj_set_style_outline_width(roller, 0, 0);
-    style_roller_selected(roller, LV_PART_SELECTED);
-    style_roller_selected(roller, LV_PART_SELECTED | LV_STATE_FOCUSED);
-    style_roller_selected(roller, LV_PART_SELECTED | LV_STATE_EDITED);
-    style_roller_selected(roller, LV_PART_SELECTED | LV_STATE_FOCUS_KEY);
+    style_roller_selected(roller, ui_part_state(LV_PART_SELECTED));
+    style_roller_selected(roller, ui_part_state(LV_PART_SELECTED, LV_STATE_FOCUSED));
+    style_roller_selected(roller, ui_part_state(LV_PART_SELECTED, LV_STATE_EDITED));
+    style_roller_selected(roller, ui_part_state(LV_PART_SELECTED, LV_STATE_FOCUS_KEY));
 }
 
 static const char *factory_result_text(factory_test_result_t result)
