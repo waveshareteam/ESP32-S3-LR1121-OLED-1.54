@@ -12,9 +12,16 @@ BOARD = "esp32_s3_lr1121_oled_1_54_xf"
 @unittest.skipUnless(shutil.which("cmake"), "CMake is required")
 class BoardCmakeTests(unittest.TestCase):
     def test_regeneration_is_idempotent_and_keeps_other_sources(self):
+        for directory in ("components/esp32_s3_lr1121_oled_1_54_support/boards",
+                          "managed_components/waveshare__waveshare_boards/boards"):
+            with self.subTest(directory=directory):
+                self.check_board_path(directory)
+
+    def check_board_path(self, directory):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            board = root / "components/esp32_s3_lr1121_oled_1_54_support/boards" / BOARD
+            board = root / directory / BOARD
+            relative = ("../" if directory.startswith("components/") else "../../") + directory.removeprefix("components/") + "/" + BOARD
             board.mkdir(parents=True)
             for name in ("board_info.yaml", "board_devices.yaml", "board_peripherals.yaml"):
                 (board / name).touch()
@@ -24,17 +31,17 @@ class BoardCmakeTests(unittest.TestCase):
             # Initial dependency resolution runs before bmgr creates any files.
             subprocess.run(command, cwd=root, check=True, capture_output=True)
             generated = root / "components/gen_bmgr_codes/CMakeLists.txt"
-            generated.parent.mkdir()
+            generated.parent.mkdir(parents=True)
             (generated.parent / "board_manager.defaults").write_text(
                 f'CONFIG_ESP_BOARD_NAME="{BOARD}"\n')
             original = (
                 '# Generated board metadata\n'
                 'idf_component_register(\n'
-                f'  SRC_DIRS "." "../esp32_s3_lr1121_oled_1_54_support/boards/{BOARD}" "extra"\n'
-                f'  INCLUDE_DIRS "." "../esp32_s3_lr1121_oled_1_54_support/boards/{BOARD}"\n'
+                f'  SRC_DIRS "." "{relative}" "extra"\n'
+                f'  INCLUDE_DIRS "." "{relative}"\n'
                 '  REQUIRES esp_board_manager)\n'
             )
-            expected = original.replace(f' "../esp32_s3_lr1121_oled_1_54_support/boards/{BOARD}"', '')
+            expected = original.replace(f' "{relative}"', '')
             for _ in range(2):
                 # Simulate bmgr regenerating its original CMake file.
                 generated.write_text(original)
@@ -47,7 +54,7 @@ class BoardCmakeTests(unittest.TestCase):
             (board / "setup.c").touch()
             result = subprocess.run(command, cwd=root, capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("exactly the three product YAML files", result.stderr)
+            self.assertIn("exactly the three product YAML files", ' '.join(result.stderr.split()))
             self.assertEqual(generated.read_text(), expected)
 
     def test_wrong_or_incomplete_board_fails_before_rewriting_generated_code(self):

@@ -3,13 +3,17 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import sys
 import unittest
 
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT = ROOT / "examples/esp-idf/10_walkie_talkie"
-BOARD = PROJECT / "components/esp32_s3_lr1121_oled_1_54_support/boards/esp32_s3_lr1121_oled_1_54_xf"
+sys.path.insert(0, str(ROOT / "scripts"))
+from generate_board import board_directory
+
+BOARD = board_directory("examples/esp-idf/10_walkie_talkie")
 
 # Hardware calls are mocked; the implementation under test is the real product C file.
 API = r"""
@@ -42,7 +46,21 @@ typedef void *i2s_chan_handle_t;
 typedef void *esp_codec_dev_handle_t;
 typedef struct { uint32_t sample_rate; int channel, bits_per_sample, channel_mask; } esp_codec_dev_sample_info_t;
 typedef struct { int sample_rate; } dev_custom_audio_config_t;
-typedef struct { struct { struct { struct { int total_slot, slot_mask; } slot_cfg; } tdm; } i2s_cfg; } periph_i2s_config_t;
+#define I2S_DIR_TX 1
+#define I2S_DIR_RX 2
+#define I2S_COMM_MODE_STD 0
+#define I2S_COMM_MODE_TDM 1
+#define I2S_TDM_SLOT0 1
+typedef struct {
+    int direction, mode, pin_sentinel;
+    union {
+        struct { struct { int sample_rate_hz; } clk_cfg; struct { int total_slot, slot_mask; } slot_cfg; } std, tdm;
+    } i2s_cfg;
+} periph_i2s_config_t;
+int esp_board_periph_init_custom(const char *, int (*)(void *, int, void **), int (*)(void *));
+int esp_board_periph_deinit(const char *);
+int periph_i2s_init(void *, int, void **);
+int periph_i2s_deinit(void *);
 typedef int AUDIO_PLAYER_MUTE_SETTING;
 #define AUDIO_PLAYER_MUTE 1
 #define AUDIO_PLAYER_UNMUTE 0
@@ -82,7 +100,39 @@ HARNESS = r"""
 #include "board_audio_player.c"
 static int speaker, microphone, tx, rx;
 static dev_custom_audio_config_t board_audio = { TEST_RATE };
-static periph_i2s_config_t board_rx = { .i2s_cfg.tdm.slot_cfg = { TEST_SLOTS, 1 } };
+static const periph_i2s_config_t board_rx = {
+    .direction = I2S_DIR_RX, .mode = I2S_COMM_MODE_TDM, .pin_sentinel = 42,
+    .i2s_cfg.tdm = { .clk_cfg = { TEST_RATE }, .slot_cfg = { TEST_SLOTS, 15 } }
+};
+static const periph_i2s_config_t board_tx = {
+    .direction = I2S_DIR_TX, .mode = I2S_COMM_MODE_STD, .pin_sentinel = 42,
+    .i2s_cfg.std.clk_cfg = { TEST_RATE }
+};
+static unsigned channel_inits;
+static int channel_error;
+int esp_board_periph_init_custom(const char *name, int (*init)(void *, int, void **), int (*deinit)(void *)) {
+    const periph_i2s_config_t *config = !strcmp(name, "i2s_speaker") ? &board_tx : &board_rx;
+    if (channel_error && config == &board_rx) return ESP_FAIL;
+    void *handle = NULL;
+    return init((void *)config, sizeof(*config), &handle);
+}
+int esp_board_periph_deinit(const char *name) { assert(!strcmp(name, "i2s_speaker")); return ESP_OK; }
+int periph_i2s_init(void *data, int size, void **handle) {
+    periph_i2s_config_t *cfg = data;
+    assert(size == sizeof(*cfg) && cfg->pin_sentinel == 42);
+    if (cfg->direction == I2S_DIR_RX) {
+        assert(cfg->i2s_cfg.tdm.clk_cfg.sample_rate_hz == 8000);
+        assert(cfg->i2s_cfg.tdm.slot_cfg.total_slot == 2);
+        assert(cfg->i2s_cfg.tdm.slot_cfg.slot_mask == 1);
+        *handle = &rx;
+    } else {
+        assert(cfg->i2s_cfg.std.clk_cfg.sample_rate_hz == 8000);
+        *handle = &tx;
+    }
+    ++channel_inits;
+    return ESP_OK;
+}
+int periph_i2s_deinit(void *handle) { return ESP_OK; }
 static esp_codec_dev_sample_info_t speaker_format, microphone_format;
 static unsigned opens;
 static int open_error, io_error;
@@ -92,14 +142,14 @@ int esp_board_manager_get_device_config(const char *name, void **out) {
     assert(!strcmp(name, "audio")); *out = &board_audio; return ESP_OK;
 }
 int esp_board_manager_get_periph_config(const char *name, void **out) {
-    assert(!strcmp(name, "i2s_microphone")); *out = &board_rx; return ESP_OK;
+    assert(!strcmp(name, "i2s_microphone")); *out = (void *)&board_rx; return ESP_OK;
 }
 int board_peripheral(const char *name, void **out) {
     assert(!strcmp(name, "i2s_speaker") || !strcmp(name, "i2s_microphone"));
     *out = !strcmp(name, "i2s_speaker") ? &tx : &rx; return ESP_OK;
 }
-void *board_audio_codec_speaker_init(uint32_t rate) { assert(rate == TEST_RATE); return &speaker; }
-void *board_audio_codec_microphone_init(uint32_t rate) { assert(rate == TEST_RATE); return &microphone; }
+void *board_audio_codec_speaker_init(uint32_t rate) { assert(rate == 8000); return &speaker; }
+void *board_audio_codec_microphone_init(uint32_t rate) { assert(rate == 8000); return &microphone; }
 int esp_codec_dev_open(void *dev, esp_codec_dev_sample_info_t *fs) {
     if (open_error) return open_error;
     assert(dev == &speaker || dev == &microphone);
@@ -126,7 +176,12 @@ static void check_format(void) {
 }
 int main(int argc, char **argv) {
     assert(board_extra_codec_dev_resume() == ESP_ERR_INVALID_STATE);
-    if (argc > 1) {
+    if (argc > 1 && !strcmp(argv[1], "channel-failure")) {
+        channel_error = 1;
+        assert(board_extra_codec_init() == ESP_FAIL && opens == 0);
+        channel_error = 0;
+    }
+    if (argc > 1 && !strcmp(argv[1], "open-failure")) {
         open_error = ESP_FAIL;
         assert(board_extra_codec_init() == ESP_FAIL);
         assert(opens == 0);
@@ -135,6 +190,11 @@ int main(int argc, char **argv) {
     assert(board_extra_codec_init() == ESP_OK && opens == 2);
     assert(board_extra_codec_sample_rate_get() == 8000);
     check_format();
+    unsigned initialized = channel_inits;
+    assert(board_extra_codec_init() == ESP_OK && channel_inits == initialized);
+    assert(board_rx.i2s_cfg.tdm.clk_cfg.sample_rate_hz == TEST_RATE);
+    assert(board_rx.i2s_cfg.tdm.slot_cfg.total_slot == TEST_SLOTS);
+    assert(board_rx.i2s_cfg.tdm.slot_cfg.slot_mask == 15);
     int16_t pcm[160]; size_t count = 0;
     assert(board_extra_i2s_read(pcm, sizeof(pcm), &count, 100) == ESP_OK);
     assert(count == 320 && last_timeout == 100);
@@ -154,16 +214,16 @@ int main(int argc, char **argv) {
 
 
 class WalkieAudioTests(unittest.TestCase):
-    def test_board_matches_codec2_and_shared_clock(self):
+    def test_online_defaults_and_shared_clock(self):
         devices = {d["name"]: d for d in yaml.safe_load((BOARD / "board_devices.yaml").read_text())["devices"]}
         peripherals = {p["name"]: p for p in yaml.safe_load((BOARD / "board_peripherals.yaml").read_text())["peripherals"]}
         tx, rx = (peripherals[n]["config"] for n in ("i2s_speaker", "i2s_microphone"))
-        self.assertEqual(devices["audio"]["config"]["sample_rate"], 8000)
-        self.assertEqual(tx["sample_rate_hz"], 8000)
-        self.assertEqual(rx["sample_rate_hz"], 8000)
+        self.assertEqual(devices["audio"]["config"]["sample_rate"], 16000)
+        self.assertEqual(tx["sample_rate_hz"], 16000)
+        self.assertEqual(rx["sample_rate_hz"], 16000)
         self.assertEqual((tx["data_bit_width"], rx["data_bit_width"]), (16, 16))
-        self.assertEqual(rx["total_slot"], 2)
-        self.assertEqual(rx["slot_mask"], "I2S_TDM_SLOT0")
+        self.assertEqual(rx["total_slot"], 4)
+        self.assertEqual(rx["slot_mask"], "I2S_TDM_SLOT0 | I2S_TDM_SLOT1 | I2S_TDM_SLOT2 | I2S_TDM_SLOT3")
         self.assertEqual(tx["slot_mode"], "I2S_SLOT_MODE_MONO")
         for pin in ("mclk", "bclk", "ws"):
             self.assertEqual(tx["pins"][pin], rx["pins"][pin])
@@ -189,7 +249,7 @@ class WalkieAudioTests(unittest.TestCase):
                             f"-DTEST_RATE={rate}", f"-DTEST_SLOTS={slots}",
                             "-I", str(out), "-I", str(PROJECT / "components/esp32_s3_lr1121_oled_1_54_support"),
                             str(out / "test.c"), "-o", str(out / "test")], check=True, capture_output=True)
-            for args in ([], ["open-failure"]):
+            for args in ([], ["open-failure"], ["channel-failure"]):
                 subprocess.run([str(out / "test"), *args], check=True, capture_output=True)
 
 

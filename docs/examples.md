@@ -22,7 +22,7 @@ Names are lower-case snake_case with exactly two prefix digits. Each numbered ro
 
 Use one of the stable versions or the pinned 6.2 development revision in `config/frameworks.json`. All 12 IDF source projects are included in the [6.2 compatibility lane](idf-6.2.md); the development revision is not a stable release. Ubuntu Bash, from a selected project directory in a clean checkout with ESP-IDF activated:
 
-The 11 numbered IDF examples currently lack their product board YAML, and the published board pack 0.1.1 does not supply it yet. Their clean builds are pending publication and integration of that profile. The commands below apply once the required board data is available; see [Board Manager setup](board-manager.md). The factory source still contains its local definition.
+The 11 numbered IDF examples use the published online product profile (verified with board pack 0.1.2). The factory source retains its local definition. Resolve the managed dependencies and select the product by name as shown below; see [Board Manager setup](board-manager.md).
 
 ```bash
 idf.py set-target esp32s3

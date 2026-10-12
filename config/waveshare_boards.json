@@ -2,5 +2,5 @@
   "repository": "https://github.com/waveshareteam/waveshare_boards",
   "component": "waveshare/waveshare_boards",
   "version": "*",
-  "local_board": "esp32_s3_lr1121_oled_1_54_xf"
+  "board": "esp32_s3_lr1121_oled_1_54_xf"
 }

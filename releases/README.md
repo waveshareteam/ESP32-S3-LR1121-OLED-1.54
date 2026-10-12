@@ -6,7 +6,7 @@ The **Firmware Release** workflow starts on a stable `vMAJOR.MINOR.PATCH` tag. I
 
 The complete matrix currently contains **47 archives**: 12 IDF projects × two stable framework versions, 12 builds on the pinned ESP-IDF 6.2 development revision, and 11 Arduino sketches. Development archives are explicitly labeled and retain their framework commit. The release validator rejects missing, duplicate, unexpected or stale-commit archives. After validation, publication creates or updates a draft, verifies every uploaded asset's name, size and SHA-256 digest, then publishes. An existing public Release cannot be overwritten; fixes require a new version. One public asset is downloaded again and independently validated after publication.
 
-**Publication is currently blocked by the pending product board definitions.** The 11 IDF example profiles are absent locally and are not in board pack 0.1.1. The related tests and repository validator remain failures. Publishing and integrating the correct upstream profiles must precede a release tag; the walkie-talkie audio configuration must preserve its 8 kHz, two-slot, slot-0 capture settings. See [Board Manager setup](../docs/board-manager.md).
+The product profile is available in online board pack 0.1.2. Static checks fetch and verify the latest stable pack, and IDF builds resolve the wildcard managed dependency. IDF 10 applies its 8 kHz, two-slot, slot-0 speech format through Board Manager initialization hooks. All required checks and all 47 firmware archives must pass before a stable tag can publish a Release; see [Board Manager setup](../docs/board-manager.md).
 
 ## Maintainer procedure
 

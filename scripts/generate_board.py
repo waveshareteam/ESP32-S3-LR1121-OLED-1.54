@@ -7,7 +7,16 @@ from discover_examples import ROOT, discover, settings
 
 
 def board_directory(project, root=ROOT):
-    return root / project / "components/esp32_s3_lr1121_oled_1_54_support/boards" / settings(root)["board"]
+    board = settings(root)["board"]
+    # Only the factory source retains a local profile. Never silently use that
+    # profile for another application or recreate deleted example board copies.
+    local = root / project / "components/esp32_s3_lr1121_oled_1_54_support/boards" / board
+    managed = root / project / "managed_components/waveshare__waveshare_boards/boards" / board
+    cached = root / ".ci/board-profile/boards" / board
+    for candidate in (local, managed, cached):
+        if candidate.is_dir():
+            return candidate
+    raise ValueError(f"Product board unavailable for {project}; run python scripts/fetch_board.py")
 
 
 def hardware_header(board):

@@ -27,7 +27,7 @@ ESP32-S3-LR1121-OLED-1.54-XF 是一款面向 LoRa 无线通信和音频应用的
 
 ESP-IDF 项目使用各自的 `sdkconfig.defaults`，通过组件注册表在线下载 `waveshare/waveshare_boards` 的最新兼容版本。产品 C/H 适配代码位于 `components/esp32_s3_lr1121_oled_1_54_support`。当前配置的框架版本为 ESP-IDF **v5.5.5 / v6.1** 和 Arduino-ESP32 **3.3.12**，另外固定 **ESP-IDF 6.2 开发版**作为全部 IDF 项目的兼容性目标。LVGL 显示示例使用 **LVGL 9.5.0**，其中 IDF 显示项目使用 **LVGL Adapter 0.7.0**。
 
-**ESP-IDF 板定义接入尚未完成。** `examples/esp-idf/` 下 11 个示例的本地板定义 YAML 已删除，当前在线板包 0.1.1 尚未包含本型号。全新构建这些示例需等待产品板定义发布，并完成[板配置生成与校验工具的接入](docs/board-manager.md)。工厂演示源码仍保留本地板定义。Arduino 依赖（包括捆绑的 LVGL）继续保留。
+**ESP-IDF 已接入在线产品板定义。** `examples/esp-idf/` 下 11 个示例从 `waveshare/waveshare_boards` 下载 `esp32_s3_lr1121_oled_1_54_xf`（已核验 0.1.2，依赖仍为 `*`），使用方法见[板配置生成与校验](docs/board-manager.md)。工厂演示源码仍保留本地板定义。Arduino 依赖（包括捆绑的 LVGL）继续保留。
 
 首次构建 IDF 示例前，请完成 [Board Manager 配置](docs/board-manager.md#enable-bmgr-with-esp-idf-55-or-6x)：在当前 IDF 的 Python 环境安装扩展、解析依赖，再按`idf.py bmgr -b esp32_s3_lr1121_oled_1_54_xf` 命令选择板定义。IDF 5.5 也通过该扩展提供 `bmgr` 命令。
 

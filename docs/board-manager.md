@@ -10,9 +10,9 @@ dependencies:
 
 Component Manager installs it under `managed_components/waveshare__waveshare_boards/`. The wildcard in `config/waveshare_boards.json` and each manifest allows the latest compatible release when dependencies are first resolved. If `dependencies.lock` already exists, run `idf.py update-dependencies` from the application directory to refresh resolved versions. There is no local `components/waveshare_boards` copy to override the download.
 
-The 11 projects under `examples/esp-idf/` no longer contain local board YAML. At the latest check, published pack 0.1.1 and upstream `main` do not yet contain `esp32_s3_lr1121_oled_1_54_xf`. Those examples cannot generate a fresh board configuration until the product profile is published and the generator/check integration is completed. This is a known pending migration; missing board data is not treated as a successful build or validation.
+The 11 projects under `examples/esp-idf/` use `boards/esp32_s3_lr1121_oled_1_54_xf` from the online pack, verified with registry 0.1.2. They contain no local YAML copies. Static CI downloads the latest stable pack, verifies every file against the registry SHA-256 checksums, and caches only the product YAML under ignored `.ci/board-profile/`. Missing, changed or corrupt profiles fail validation. The resolved version and component hash are included in the inventory artifact.
 
-`firmware/12_factory_demo` still retains its three local YAML files. Its audio configuration is different from IDF 10's 8 kHz, two-slot profile and must not be used as a substitute for that example. Downloaded component files are never edited.
+`firmware/12_factory_demo` still retains its three local YAML files. Its default audio configuration matches the online profile: 16 kHz with four microphone slots. IDF 10 selects its application-specific speech format during initialization. Downloaded component files are never edited.
 
 ```text
 examples/esp-idf/10_walkie_talkie/
@@ -36,11 +36,11 @@ Product C/H adapters stay at the `esp32_s3_lr1121_oled_1_54_support` component l
 
 Every local adapter has `setup_device.c` and the public board/GPIO headers. Sensor examples add `board_sensors.c`; display examples add `board_display.c`; audio examples add `board_audio.c`, `board_audio_player.c` and their header; radio examples add `EspHal.h` and `board_radio.h`. The local manifest contains that example's managed dependencies. Local Kconfig records its display/audio capabilities.
 
-Once the product profile is available, `idf.py bmgr -b esp32_s3_lr1121_oled_1_54_xf` selects it and generates a complete application-local `components/gen_bmgr_codes/`: C/header files, CMake registration, a dependency manifest, Kconfig, defaults and metadata. The generator does not copy or compile product adapters from the YAML directory. The generated component and the maintained `esp32_s3_lr1121_oled_1_54_support` component each compile their own sources once.
+`idf.py bmgr -b esp32_s3_lr1121_oled_1_54_xf` selects it and generates a complete application-local `components/gen_bmgr_codes/`: C/header files, CMake registration, a dependency manifest, Kconfig, defaults and metadata. The generator does not copy or compile product adapters from the YAML directory. The generated component and the maintained `esp32_s3_lr1121_oled_1_54_support` component each compile their own sources once.
 
 The application's `main` requires `esp32_s3_lr1121_oled_1_54_support`. Once generated, `esp32_s3_lr1121_oled_1_54_support` explicitly requires `gen_bmgr_codes`, so the I2C scanner's minimal build includes the board definitions. The conditional dependency permits initial dependency-resolution configuration before the first generation. `esp32_s3_lr1121_oled_1_54_support` uses whole-archive linking to retain the custom-device registrations.
 
-Each example's `components/esp32_s3_lr1121_oled_1_54_support/include/board_hardware.h` retains the previously verified GPIO constants. The published board profile must be checked against these constants, device names and custom configuration types before integration. The application-facing functions in `board_support.h` obtain handles by name through Board Manager. Devices initialize lazily, so an absent SD card does not stop unrelated examples. Applications borrow bus/device handles; startup initialization is serialized before worker tasks.
+Each example's `components/esp32_s3_lr1121_oled_1_54_support/include/board_hardware.h` retains the previously verified GPIO constants. The GPIO generator and validator compare these constants with the resolved online profile, or the verified static-check cache when managed components are absent. The application-facing functions in `board_support.h` obtain handles by name through Board Manager. Devices initialize lazily, so an absent SD card does not stop unrelated examples. Applications borrow bus/device handles; startup initialization is serialized before worker tasks.
 
 Product functions use the `board_` prefix throughout: `board_init()`, `board_peripheral()`, `board_device()`, `board_button()`, `board_display_start()` and the `board_extra_codec_*` / `board_extra_player_*` audio helpers. Applications and test fixtures use the same public names.
 
@@ -59,7 +59,7 @@ Product functions use the `board_` prefix throughout: `board_init()`, `board_per
 - SSD1309 I2C panel construction: Board Manager 0.7.3~1 has no native I2C `display_lcd` subtype. The managed SSD1309 driver supplies the controller sequence. This OLED has no touch, backlight, IO expander, or MCU-controlled reset pin.
 - `board_display.c` registers the named OLED with Adapter's monochrome profile, then registers manager-provided navigation buttons. Adapter owns LVGL initialization, its task, locks, flush callbacks and both draw/conversion buffers. There is no local LVGL port or display flush implementation in IDF.
 - Adapter 0.7.0 creates navigation input in event mode but its button callbacks only update state; they never trigger an LVGL input read. The local display glue switches this input to `LV_INDEV_MODE_TIMER` under the Adapter lock. The Adapter's LVGL task then reads presses/releases and handles navigation, confirmation and key repeat. Recheck this workaround when upgrading Adapter.
-- `board_audio.c` combines stable codec 1.5.11 with the manager's STD TX / TDM RX channels. `board_audio_player.c` retains MP3/file-iterator and codec-format helpers. Walkie-talkie uses the YAML sample rate and RX slot mask during codec open/resume, and reads/writes the manager-owned I2S handles with explicit timeouts. It selects 8 kHz, two physical slots and slot-0-only capture for Codec2; the other audio applications retain four-slot capture. The generic manager audio device would select a beta codec API; it is not enabled.
+- `board_audio.c` combines stable codec 1.5.11 with the manager's STD TX / TDM RX channels. `board_audio_player.c` retains MP3/file-iterator and codec-format helpers. Walkie-talkie uses `esp_board_periph_init_custom()` with a copy of the online I2S configuration, changing only the application stream rate and RX slots before calling the managed I2S initializer. It selects 8 kHz, two physical slots and slot-0-only capture for Codec2 and preserves that format during codec open/resume. GPIOs, bus ports and codec addresses remain defined by the online board. Generated const configurations and downloaded files are never modified; the other audio applications retain four-slot capture. The generic manager audio device would select a beta codec API; it is not enabled.
 - The BQ27220 driver uses `i2c_bus` 1.4.2 V2 to borrow the existing native manager bus. RTC uses the native handle directly. Battery calibration parameters retain the original demo behavior; the supplied capacity must match the installed cell.
 - RadioLib's GPIO/interrupt and transaction protocol bridge and the Core1121 RF-switch table remain local. They contain no independent bus initialization.
 - Existing Codec2 sources remain as third-party algorithm components in the two source applications; their variants are preserved. They are not board components and do not own GPIOs.
@@ -78,7 +78,7 @@ python -m pip install idf-component-manager==2.5.0 esp-bmgr-assist==0.8.3
 
 For **IDF 6.1**, use Component Manager **3.0.3**; the pinned **6.2 development** environment uses **3.1.2**. Keep the helper at **0.8.3**. Do not install Component Manager 2.x into IDF 6.x. CI selects these versions from `config/frameworks.json`.
 
-After the pending product profile has been published and integrated, resolve dependencies without compiling, list the boards, then select this product from an application under `examples/esp-idf/`:
+Resolve dependencies without compiling, list the boards, then select this product from an application under `examples/esp-idf/`:
 
 ```text
 idf.py reconfigure
@@ -114,8 +114,18 @@ idf.py bmgr -l
 idf.py bmgr -b esp32_s3_lr1121_oled_1_54_xf
 ```
 
-## Pending board integration
+## Static profile checks
 
-Submit the product profile to the official board pack and publish it in the Component Registry. A GitHub merge alone does not update the registry dependency. Preserve the product's custom device configuration types, named handles and GPIO polarity, and provide IDF 10's 8 kHz, two-slot, slot-0 microphone configuration without changing the other audio examples' format.
+From the repository root, with Python and PyYAML installed (Ubuntu Bash or Windows PowerShell):
 
-The GPIO generator, YAML validation/audio tests and YAML-only CMake normalizer still target local board directories. Adapt them to the published profile before considering the online migration complete, then regenerate each application's board component and run its checks. These checks currently remain enabled and fail on the missing example YAML. Do not select another product to work around the missing profile.
+```text
+python scripts/fetch_board.py
+python scripts/generate_board.py --check
+python -m unittest discover -s tests -v
+python scripts/validate_repo.py
+python scripts/inventory_repo.py
+```
+
+The fetch step verifies every package file before caching the three YAML files. It records the resolved registry version, component hash and product file hashes in `.ci/board-profile/resolved.json`. No downloaded profile is committed. For a configured project, checks use its actual managed profile; the factory's local profile is only used by the factory project.
+
+The CMake normalizer handles both managed and retained factory YAML paths. It removes only YAML-only source/include directories from the generated component and rejects unexpected board sources. The selected-board guard remains active before dependency resolution. Host audio tests execute the real IDF 10 adapter against mocked hardware, starting from the published 16 kHz/four-slot defaults and verifying 8 kHz/two-slot/slot-0 initialization, retries, reopening and partial-I/O timeouts.

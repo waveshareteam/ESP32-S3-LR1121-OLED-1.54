@@ -13,7 +13,7 @@ from generate_board import board_directory, hardware_header
 def validate(root=ROOT):
     cfg = settings(root)
     board_pack = json.loads((root / "config/waveshare_boards.json").read_text())
-    assert board_pack["local_board"] == cfg["board"]
+    assert board_pack["board"] == cfg["board"]
     assert board_pack["component"] == "waveshare/waveshare_boards"
     assert board_pack["version"] == "*", "Allow the latest compatible board-pack release"
     checks = 0
@@ -51,7 +51,8 @@ def validate(root=ROOT):
                 for name in ("waveshare_boards", "waveshare__waveshare_boards"):
                     assert not (p / "components" / name).exists(), f"Local component shadows registry pack: {e['path']}"
                 board = board_directory(e["path"], root)
-                assert board.is_dir(), f"Product board YAML unavailable: {e['path']}; online board integration is pending"
+                if e["path"].startswith("examples/"):
+                    assert not (local / "boards").exists(), f"Use the online board profile: {e['path']}"
                 assert {f.name for f in board.iterdir()} == {
                     "board_info.yaml", "board_devices.yaml", "board_peripherals.yaml"
                 }, e["path"]

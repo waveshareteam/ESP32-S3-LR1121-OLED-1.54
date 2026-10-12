@@ -32,7 +32,42 @@ static esp_codec_dev_handle_t record_dev_handle;
 static i2s_chan_handle_t play_i2s_handle;
 static i2s_chan_handle_t record_i2s_handle;
 static uint32_t audio_sample_rate;
-static periph_i2s_config_t *microphone_config;
+static periph_i2s_config_t microphone_config;
+static bool audio_channels_ready;
+
+// Codec2 carries mono 8 kHz speech. Keep wiring from the online board while
+// selecting the application's stream format through Board Manager's init hook.
+#define WALKIE_SAMPLE_RATE 8000
+static esp_err_t walkie_i2s_init(void *config, int size, void **handle)
+{
+    ESP_RETURN_ON_FALSE(config && size == sizeof(periph_i2s_config_t), ESP_ERR_INVALID_ARG, TAG, "I2S config size");
+    periph_i2s_config_t format = *(const periph_i2s_config_t *)config;
+    if (format.direction == I2S_DIR_TX && format.mode == I2S_COMM_MODE_STD) {
+        format.i2s_cfg.std.clk_cfg.sample_rate_hz = WALKIE_SAMPLE_RATE;
+    } else if (format.direction == I2S_DIR_RX && format.mode == I2S_COMM_MODE_TDM) {
+        format.i2s_cfg.tdm.clk_cfg.sample_rate_hz = WALKIE_SAMPLE_RATE;
+        format.i2s_cfg.tdm.slot_cfg.total_slot = 2;
+        format.i2s_cfg.tdm.slot_cfg.slot_mask = I2S_TDM_SLOT0;
+        microphone_config = format;
+    } else {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return periph_i2s_init(&format, sizeof(format), handle);
+}
+
+static esp_err_t walkie_audio_channels_init(void)
+{
+    if (audio_channels_ready) return ESP_OK;
+    ESP_RETURN_ON_ERROR(esp_board_periph_init_custom("i2s_speaker", walkie_i2s_init, periph_i2s_deinit),
+                        TAG, "Speaker stream format");
+    esp_err_t err = esp_board_periph_init_custom("i2s_microphone", walkie_i2s_init, periph_i2s_deinit);
+    if (err != ESP_OK) {
+        esp_board_periph_deinit("i2s_speaker");
+        return err;
+    }
+    audio_channels_ready = true;
+    return ESP_OK;
+}
 
 static bool _is_audio_init = false;
 static bool _is_player_init = false;
@@ -127,8 +162,8 @@ esp_err_t board_extra_codec_set_fs(uint32_t rate, uint32_t bits_cfg, i2s_slot_mo
     if (record_dev_handle) {
         // Two physical slots share the speaker clock; DMA returns only slot 0.
         // An explicit mask also keeps ES7210's TDM path at 16 bits per sample.
-        fs.channel = microphone_config->i2s_cfg.tdm.slot_cfg.total_slot;
-        fs.channel_mask = microphone_config->i2s_cfg.tdm.slot_cfg.slot_mask;
+        fs.channel = microphone_config.i2s_cfg.tdm.slot_cfg.total_slot;
+        fs.channel_mask = microphone_config.i2s_cfg.tdm.slot_cfg.slot_mask;
         ESP_RETURN_ON_ERROR(esp_codec_dev_open(record_dev_handle, &fs), TAG, "Open record codec failed");
         ESP_RETURN_ON_ERROR(esp_codec_dev_set_in_gain(record_dev_handle, CODEC_DEFAULT_ADC_VOLUME), TAG, "Set record gain failed");
     }
@@ -206,12 +241,8 @@ esp_err_t board_extra_codec_init(void)
         return ESP_OK;
     }
 
-    dev_custom_audio_config_t *config = NULL;
-    ESP_RETURN_ON_ERROR(esp_board_manager_get_device_config("audio", (void **)&config), TAG, "Audio config");
-    ESP_RETURN_ON_FALSE(config && config->sample_rate > 0, ESP_ERR_INVALID_ARG, TAG, "Invalid audio rate");
-    audio_sample_rate = config->sample_rate;
-    ESP_RETURN_ON_ERROR(esp_board_manager_get_periph_config("i2s_microphone", (void **)&microphone_config),
-                        TAG, "Microphone format");
+    ESP_RETURN_ON_ERROR(walkie_audio_channels_init(), TAG, "Walkie-talkie stream format");
+    audio_sample_rate = WALKIE_SAMPLE_RATE;
 
     play_dev_handle = board_audio_codec_speaker_init(audio_sample_rate);
     ESP_RETURN_ON_FALSE(play_dev_handle, ESP_ERR_NOT_FOUND, TAG, "play_dev_handle not initialized");

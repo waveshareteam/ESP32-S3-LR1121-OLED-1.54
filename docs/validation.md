@@ -4,6 +4,14 @@ Validation covers static checks, Board Manager generation, CMake configuration, 
 
 `libraries/lvgl` is intentionally retained for Arduino. Repository validation accepts this dependency; ESP-IDF display projects still require managed LVGL in their manifests. Earlier failure reports below about an offline LVGL tree describe the former validation rule, which has been removed. The library's existing edits and whitespace findings are outside this cleanup's scope.
 
+## Online board integration (2026-10-12)
+
+Registry board pack 0.1.2 includes `esp32_s3_lr1121_oled_1_54_xf`. All 50 published files passed size and SHA-256 checks, and the product YAML matches upstream revision `a226300a947a7edb5f31925666394a0a64079325`. All 12 maintained GPIO headers match that profile. The 11 deleted example board directories remain absent; the factory retains its local profile. Dependencies continue to request `*`.
+
+Static CI now fetches and verifies the latest stable board profile before tests, generation checks, validation and inventory. CMake accepts the managed YAML path and retains the wrong-board/source-ownership checks. IDF 10 applies the Codec2 8 kHz/two-slot/slot-0 format through Board Manager's custom peripheral initializer, copying the immutable online configuration and retaining its wiring. Host tests exercise initialization/retry, codec-open failure, stop/resume and partial I/O. The factory Codec2 table now initializes all fields, as already done in IDF 10, addressing IDF 6's missing-field error without disabling warnings.
+
+All 36 host tests pass, along with repository validation of 23 first-party entries, all 12 GPIO-header checks, actionlint, inventory, public-content scanning and maintained-source diff checks. The earlier missing-board failures below are historical and superseded by this integration. Full firmware builds run in GitHub Actions; local checks remain within the static/configuration boundary. Hardware speech quality, buttons, RF and flashing still require physical validation.
+
 ## CI and release repair (2026-10-12)
 
 GitHub `main` at `a0bf739` matched the GitLab source. The first push ran Arduino CI: ten builds and packages succeeded, while `08_oled_ssd1309` failed during library discovery with `lv_conf.h: No such file or directory`. The ESP-IDF workflow was rejected before any build because job-level `env` used the unavailable `runner` expression context. Static tests failed on the two known missing-board-YAML accesses.
@@ -16,9 +24,9 @@ The full local suite has 33 tests: 31 pass and the same two audio tests fail bec
 
 The upstream board pack was rechecked: registry 0.1.1 and upstream `37f2df77734b2f894c0935d9d2cf57ddf23e1079` still do not contain this product. The 11 deleted board directories have not been restored. The two tests and repository validator continue to fail explicitly, and the new Release gate cannot publish until board publication and generator/check integration are complete. These failures are not waived or converted to skips. Full local firmware builds, flashing and hardware tests were not performed.
 
-## Current source synchronization status
+## Historical source synchronization (2026-10-10)
 
-On 2026-10-10, all 11 local `boards` directories under `examples/esp-idf/` were removed by request, pending a product-profile contribution to `waveshare_boards`. The factory source retains its board YAML. Registry version 0.1.1 and upstream revision `37f2df77734b2f894c0935d9d2cf57ddf23e1079` do not yet include this product. Fresh example builds and the generator/check migration remain pending; see [Board Manager setup](board-manager.md#pending-board-integration).
+On 2026-10-10, all 11 local `boards` directories under `examples/esp-idf/` were removed by request, pending a product-profile contribution to `waveshare_boards`. The factory source retains its board YAML. Registry version 0.1.1 and upstream revision `37f2df77734b2f894c0935d9d2cf57ddf23e1079` do not yet include this product. Fresh example builds and the generator/check migration remain pending; see [Board Manager setup](board-manager.md#static-profile-checks).
 
 At that synchronization, the checkout passed 18 of 20 host tests. Two audio tests and repository validation fail because they require the deleted YAML. The public-content scan passes, and discovery still finds 12 IDF source projects and 11 Arduino sketches. An isolated diagnostic copy supplied with the previous YAML passes all 20 tests and validation of all 23 entries; this isolates the known missing-board-data failure but does not establish success for the current checkout. No firmware build or hardware test was run for this synchronization.
 

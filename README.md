@@ -27,7 +27,7 @@ Choose a framework and open the README in the example directory:
 
 ESP-IDF projects use their own `sdkconfig.defaults` and download the latest compatible `waveshare/waveshare_boards` release from the Component Registry. Product C/H adapters remain in `components/esp32_s3_lr1121_oled_1_54_support`. The configured framework versions are ESP-IDF **v5.5.5 / v6.1** and Arduino-ESP32 **3.3.12**, with an additional pinned **ESP-IDF 6.2 development** compatibility lane covering every IDF project. LVGL-based display examples use LVGL **9.5.0**; IDF display projects also use LVGL Adapter **0.7.0**.
 
-**ESP-IDF board integration is pending.** Local board YAML has been removed from the 11 examples under `examples/esp-idf/`. The current online board pack, 0.1.1, does not contain this product yet. Clean builds of those examples require publication of the product profile and completion of the generator/check integration described in [Board Manager setup](docs/board-manager.md). The factory source retains its local board definition. Arduino dependencies, including bundled LVGL, are retained.
+**ESP-IDF uses the published product board profile.** The 11 examples under `examples/esp-idf/` obtain `esp32_s3_lr1121_oled_1_54_xf` from online `waveshare/waveshare_boards` (verified with 0.1.2; the dependency remains `*`). See [Board Manager setup](docs/board-manager.md). The factory source retains its local profile. Arduino dependencies, including bundled LVGL, are retained.
 
 Before the first IDF build, follow [Board Manager setup](docs/board-manager.md#enable-bmgr-with-esp-idf-55-or-6x): install the helper in the active IDF environment, resolve dependencies, then select this board with `idf.py bmgr -b esp32_s3_lr1121_oled_1_54_xf`. This also enables `bmgr` on IDF 5.5.
 
